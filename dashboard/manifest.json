@@ -1,0 +1,10 @@
+{
+  "name": "exfilbar",
+  "label": "Exfilbar",
+  "description": "Per-file destinations and the session egress feed.",
+  "icon": "Shield",
+  "version": "0.5.0",
+  "tab": {"path": "/exfilbar", "position": "end"},
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

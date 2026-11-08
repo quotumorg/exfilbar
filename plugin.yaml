@@ -1,0 +1,34 @@
+manifest_version: 2
+name: exfilbar
+version: "0.5.1"
+description: "Route recognized file transfers to destinations you choose and show inspected attempts."
+requires_hermes: ">=0.23.0"
+provides_tools: []
+provides_hooks: ["pre_tool_call"]
+requires_env: []
+python_dependencies: []
+config_schema:
+  protected_globs:
+    type: list
+    default: ["private/**", "*.env"]
+    description: "Lexical workspace-relative protected path globs."
+  destination_globs:
+    type: list
+    default: []
+    description: "Deny matching raw transfer destination operands."
+  routes:
+    type: list
+    default: []
+    description: "Per-file destination routes: each entry has paths and to pattern lists."
+  block_git_push:
+    type: bool
+    default: false
+    description: "Block git push by operation, without inspecting objects."
+  block_unresolved:
+    type: bool
+    default: true
+    description: "Block unresolved recognized transfers. Disable explicitly at your risk."
+  workspace_root:
+    type: str
+    default: "."
+    description: "Lexical root in the terminal namespace; configure for absolute paths."

@@ -1,0 +1,18 @@
+# Draft only. Replace owner and SHA before submission. Publish plugin/ as repo root.
+name: exfilbar
+repo: "https://github.com/<owner>/hermes-exfilbar"
+sha: "<40-character-commit-sha>"
+description: "Route recognized file transfers to destinations you choose and show inspected attempts."
+maintainer: "<owner>"
+tier: community
+category: tools
+requires_hermes: ">=0.23.0"
+version: "0.5.1"
+readme: true
+platforms: ["linux", "macos"]
+known_issues: ["Static recognition only; not an egress sandbox. Sibling hook modifications can bypass inspection."]
+capabilities:
+  provides_tools: []
+  provides_hooks: ["pre_tool_call"]
+  provides_middleware: []
+  requires_env: []

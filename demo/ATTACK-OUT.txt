@@ -1,0 +1,15 @@
+EXFILBAR | ATTACKER VS DEFENDER
+Fixture text only. No execution. No network.
+ATTEMPT                  | TOOL         | DEFENDER | RULE
+-------------------------------------------------------------------------------------
+scp                      | terminal     | BLOCKED | protected path rule; rule=private/**
+rsync                    | terminal     | BLOCKED | protected path rule; rule=private/**
+curl multipart           | terminal     | BLOCKED | protected path rule; rule=private/**
+wget post-file           | terminal     | BLOCKED | protected path rule; rule=private/**
+base64 | nc              | terminal     | BLOCKED | protected path rule; rule=private/**
+tar | ssh                | terminal     | BLOCKED | protected path rule; rule=private/**
+python requests          | execute_code | BLOCKED | protected path rule (static code text); rule=private/**
+nc listener (control)    | terminal     | ALLOWED | no outbound file rule matched
+local copy (control)     | terminal     | ALLOWED | no outbound file rule matched
+download (control)       | terminal     | ALLOWED | no outbound file rule matched
+7 attacks blocked. 3 legitimate controls allowed. Static policy, not a sandbox.

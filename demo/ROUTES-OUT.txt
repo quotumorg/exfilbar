@@ -1,0 +1,8 @@
+fixture | synthetic route rehearsal; no execution; isolated feed
+route 1 | paths=reports/** | allowed hosts: uploads.example
+fixture | reports/weekly.csv | dry run | PASS | curl | allowed by route | route=route 1 | destination=https://uploads.example
+fixture | reports/weekly.csv | dry run | BLOCK | curl | off route; allowed hosts: uploads.example | path=reports/weekly.csv | route=route 1 | destination=https://elsewhere.example
+Session feed: 2 recent transfers; 1 out; 1 blocked. Retained limit 128.
+Inspected attempts only. Delivery is not confirmed.
+2000-01-01T00:00:00+00:00 | terminal | reports/weekly.csv | https://uploads.example | allowed · route 1
+2000-01-01T00:00:00+00:00 | terminal | reports/weekly.csv | https://elsewhere.example | blocked · off route; allowed hosts: uploads.example · route 1
