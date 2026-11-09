@@ -1,10 +1,12 @@
-# Exfilbar 0.5.3
+# exfilbar
+
+version 0.5.3 · community plugin for Hermes Agent, not by Nous
 
 ![exfilbar: route 1 lets reports/** go to uploads.example; partners.example is off route and blocked](docs/banner.png)
 
-Exfilbar checks recognized terminal and submitted-Python transfer syntax against configured routes; not a sandbox.
+Hermes can send a file to the wrong host. exfilbar checks recognized uploads from terminal or Python against your routes and blocks an off-route match.
 
-Coverage is limited to recognized syntax in `terminal` and `execute_code`, not general egress enforcement. Put the settings below at `plugins.entries.exfilbar.settings` in `config.yaml`.
+It is not a sandbox: coverage is limited to recognized syntax in `terminal` and `execute_code`, not general egress enforcement. Put the settings below at `plugins.entries.exfilbar.settings` in `config.yaml`.
 
 ```yaml
 routes:
