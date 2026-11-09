@@ -35,6 +35,12 @@ This is not an egress sandbox. It recognizes a bounded shell/Python subset. Scri
 
 Enforcement and storage use stdlib plus the public Hermes storage helper. The optional API uses host-provided FastAPI; both UIs use host SDKs. No transfer execution, external network, credentials, telemetry or subprocesses. See [catalog readiness](CATALOG.md) for the draft and remaining admission gates.
 
+## Alongside the Security plugin
+
+The official Security plugin (hermes-security) reviews a repository's code for weaknesses before you ship. Exfilbar reviews no code: it applies your routes at the moment Hermes is about to move a file, so an off-route transfer is stopped even when the code involved is clean.
+
+They install side by side. On Hermes v0.23.0, hermes-security 0.1.2 and Exfilbar 0.5.1 were installed with `hermes plugins install` into one profile and both enabled; in the same session Exfilbar allowed the routed upload and blocked the off-route one. Security registers no `pre_tool_call` hook, so the two do not touch each other's decisions.
+
 ## Use and configuration
 
 `/exfil check scp private/client-export.csv upload.example:incoming/` returns a **dry run** explanation. `/exfil demo` replays synthetic fixtures with no execution. `/exfil status` shows the persisted session feed. Checks and demos never add rows to the real feed.
@@ -117,7 +123,7 @@ The Python inspector parses AST without executing it. It recognizes direct impor
 
 The supplied airlock documentation describes owner approval for uploads and remote transfers, and for new/untrusted hosts after reading untrusted content. Exfilbar routes recognized transfers per file: a covered file can go silently to its configured destinations; an off-route destination blocks with a reason. These describe different policy choices without a superiority claim.
 
-Offline research describes blastradius as destructive-command explanations, camel-guard as prompt-injection defense and hermes-security as repository scanning. Those competitor implementations were not available for verification. Exfilbar acts on pending transfer arguments and user-protected paths. This is positioning only; no claim of novelty, superiority or missing competitor features is made.
+Offline research describes blastradius as destructive-command explanations and camel-guard as prompt-injection defense. Those implementations were not available for verification. hermes-security is covered in the section above. Exfilbar acts on pending transfer arguments and user-protected paths. This is positioning only; no claim of novelty, superiority or missing competitor features is made.
 
 Core already detects credential-file or secret-variable curl/wget bodies and upload pipes (`tools/approval_detection.py:356-363`), plus force pushes (`:465-466`). Exfilbar adds user-chosen ordinary paths and the bounded transfer families above. Core also guards whole Python submissions according to approval context (`tools/approval.py:1251-1282`); Exfilbar adds a static path-specific explanation. It does not replace or claim absence of those guards.
 
