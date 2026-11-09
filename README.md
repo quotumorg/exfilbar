@@ -1,5 +1,7 @@
 # Exfilbar 0.5.3
 
+![exfilbar: route 1 lets reports/** go to uploads.example; partners.example is off route and blocked](docs/banner.png)
+
 Exfilbar checks recognized terminal and submitted-Python transfer syntax against configured routes; not a sandbox.
 
 Coverage is limited to recognized syntax in `terminal` and `execute_code`, not general egress enforcement. Put the settings below at `plugins.entries.exfilbar.settings` in `config.yaml`.
@@ -50,7 +52,7 @@ Enforcement and storage use stdlib plus the public Hermes storage helper. The op
 
 The official Security plugin (hermes-security) reviews repository code. Exfilbar parses recognized terminal and submitted Python transfer syntax before dispatch.
 
-Manual observation dated 2026-11-09: Hermes v0.23.0, hermes-security 0.1.2 at `85e835c`, and Exfilbar 0.5.2 were installed with `hermes plugins install` in one profile, both enabled. The routed upload was allowed and the off-route upload was blocked. Security registers no `pre_tool_call` hook. This records the supplied manual observation; this offline fix run did not repeat it or establish general non-interference.
+Observation dated 2026-11-09: Hermes v0.23.0, hermes-security 0.1.2 at `85e835c`, and Exfilbar 0.5.3 were installed with `hermes plugins install` in one profile, both enabled. The routed upload was allowed and the off-route upload was blocked. Security registers no `pre_tool_call` hook. One run, not a general non-interference claim.
 
 ## Use and configuration
 
