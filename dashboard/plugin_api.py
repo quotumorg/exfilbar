@@ -29,6 +29,14 @@ def feed(session_id: str = '', key: str = ''):
         raise HTTPException(status_code=503, detail='Session feed unavailable') from None
 
 
+@router.get('/routes')
+def routes():
+    try:
+        return Ledger().routes()
+    except Exception:
+        raise HTTPException(status_code=503, detail='Routes unavailable') from None
+
+
 @router.get('/sessions')
 def sessions():
     try:

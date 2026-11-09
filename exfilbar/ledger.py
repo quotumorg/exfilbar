@@ -46,8 +46,31 @@ class Ledger:
                 paths_truncated INTEGER NOT NULL, destination TEXT NOT NULL,
                 decision TEXT NOT NULL, rule TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS events_session ON events(session, id);
+            CREATE TABLE IF NOT EXISTS routes (position INTEGER PRIMARY KEY, paths TEXT NOT NULL, hosts TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         ''')
         return db
+
+    def publish_routes(self, routes):
+        """Mirror the configured routes for the read-only page: paths and allowed hosts only."""
+        rows = [(i, json.dumps([clean(p, 256) for p in list(paths)[:MAX_PATHS]]),
+                 json.dumps(list(dict.fromkeys(destination(t).split('://', 1)[-1] for t in targets))[:MAX_PATHS]))
+                for i, (paths, targets) in enumerate(list(routes)[:128], 1)]
+        with closing(self.connect()) as db, db:
+            current = [tuple(r) for r in db.execute('SELECT position,paths,hosts FROM routes ORDER BY position')]
+            known = db.execute("SELECT value FROM meta WHERE key='routes_updated'").fetchone()
+            if known and current == rows:
+                return
+            db.execute('DELETE FROM routes')
+            db.executemany('INSERT INTO routes VALUES (?,?,?)', rows)
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('routes_updated', ?)", (clean(self.clock(), 40),))
+
+    def routes(self):
+        with closing(self.connect()) as db:
+            rows = db.execute('SELECT position,paths,hosts FROM routes ORDER BY position').fetchall()
+            known = db.execute("SELECT value FROM meta WHERE key='routes_updated'").fetchone()
+        return {'known': bool(known), 'updated': known[0] if known else None,
+                'routes': [{'position': r['position'], 'paths': json.loads(r['paths']), 'hosts': json.loads(r['hosts'])} for r in rows]}
 
     def record(self, session, tool, inspection):
         key = session_key(session)

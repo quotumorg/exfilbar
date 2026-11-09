@@ -7,7 +7,7 @@ maintainer: "<owner>"
 tier: community
 category: tools
 requires_hermes: ">=0.23.0"
-version: "0.5.1"
+version: "0.5.2"
 readme: true
 platforms: ["linux", "macos"]
 known_issues: ["Static recognition only; not an egress sandbox. Sibling hook modifications can bypass inspection."]

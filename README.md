@@ -1,4 +1,4 @@
-# Exfilbar 0.5.1
+# Exfilbar 0.5.2
 
 Choose where each file may go, and see the transfers Hermes inspects.
 
@@ -17,7 +17,7 @@ block_unresolved: true
 2. Send the same file to `https://elsewhere.example/up`. The hook blocks the tool call and names `route 1` and the allowed host `uploads.example`.
 3. `/exfil routes` lists your routes. `/exfil check <command>` explains a dry run. `/exfil status` reads the session feed. `/exfil demo` shows both decisions and an isolated synthetic feed.
 
-Desktop adds `exfil · N out · M blocked` for the focused session, red when its retained feed contains a block. Click it to open the feed page. The web dashboard also has an Exfilbar tab with a session selector. Feed rows show the decision once, such as `allowed · route 1` or `blocked · off route; allowed hosts: uploads.example · route 1`. Both Time columns use local HH:MM:SS, adding the local date for other days; hover for the original ISO timestamp.
+Desktop adds `exfil · N out · M blocked` for the focused session, red when its retained feed contains a block. Click it to open the Exfilbar page: your routes on top (which files may go to which hosts), then the session's attempts, each with an allowed or blocked chip, its route number and, for a block, the reason on one line. The web dashboard also has an Exfilbar tab with a session selector. Feed rows show the decision once, such as `allowed · route 1` or `blocked · off route; allowed hosts: uploads.example · route 1`. Both Time columns use local HH:MM:SS, adding the local date for other days; hover for the original ISO timestamp.
 
 ## Install
 
@@ -39,7 +39,7 @@ Enforcement and storage use stdlib plus the public Hermes storage helper. The op
 
 The official Security plugin (hermes-security) reviews a repository's code for weaknesses before you ship. Exfilbar reviews no code: it applies your routes at the moment Hermes is about to move a file, so an off-route transfer is stopped even when the code involved is clean.
 
-They install side by side. On Hermes v0.23.0, hermes-security 0.1.2 and Exfilbar 0.5.1 were installed with `hermes plugins install` into one profile and both enabled; in the same session Exfilbar allowed the routed upload and blocked the off-route one. Security registers no `pre_tool_call` hook, so the two do not touch each other's decisions.
+They install side by side. On Hermes v0.23.0, hermes-security 0.1.2 and Exfilbar 0.5.2 were installed with `hermes plugins install` into one profile and both enabled; in the same session Exfilbar allowed the routed upload and blocked the off-route one. Security registers no `pre_tool_call` hook, so the two do not touch each other's decisions.
 
 ## Use and configuration
 
@@ -79,6 +79,7 @@ Read-only API under Hermes authentication and plugin enable/profile gates:
 
 - `GET /api/plugins/exfilbar/feed?session_id=<durable-id>` returns `{events, out, blocked, limit, notice}`.
 - `GET /api/plugins/exfilbar/sessions` returns at most 32 `{key, time}` session selectors.
+- `GET /api/plugins/exfilbar/routes` returns `{known, updated, routes}` for the page's routes card: each route's position, path globs and allowed hosts. Hosts are scheme-free hostnames; URL paths, queries, credentials and remote paths are dropped. The plugin mirrors this summary into its data folder whenever Hermes loads changed settings; a mirror failure never changes a decision.
 - `GET /api/plugins/exfilbar/feed?key=<64-hex-digest>` reads a selected feed. Both selectors together or an invalid selector return 400. An unavailable database returns 503 with no internal details.
 
 There is no API for commands, arbitrary file reads, changing policy or approving transfers. `/exfil demo` uses fixed synthetic timestamps and temporary storage, so repeated output is byte-identical and does not contaminate any real feed. Its two route fixtures are recorded in `demo/ROUTES-OUT.txt`.
@@ -137,7 +138,7 @@ Normalization is lexical only. It does not inspect symlinks, mounts, containers 
 
 Sibling callbacks see original args; Hermes merges `modify` directives afterward (`hermes_cli/plugins.py:1922-1943`). A sibling can turn an allowed command into an outbound command after inspection. The regression test demonstrates this. The outer executor hook adapter also falls through on exceptions (`agent/tool_executor.py:674-675`), so this is not an independent security boundary.
 
-Runtime reads and writes its own plugin data directory and uses isolated temporary storage for the synthetic demo. It never reads source file contents. No external network, subprocesses, external file reads, background processes, installed third-party packages, credentials or telemetry. UI requests use the authenticated Hermes backend; the Desktop query and dashboard timer poll every three seconds while mounted and stop with their host lifecycle. Commands are capped at 32768 characters, tokenization at 4096 tokens and pipelines at 128 pipe operators. Exceeding a cap is unresolved. At most 32 sessions retain 128 recent recognized transfer records each in `<Hermes home>/plugin-data/exfilbar/egress.db`. The public `plugin_data_dir` helper follows the active profile. Session identifiers are hashed in full (up to 4096 characters), preventing the old 128-character prefix collision. Missing/invalid session IDs are not pooled; they do not write feed rows. Reload preserves the feed. Old sessions and rows are evicted by most recent write. Local copies, downloads and uncovered tools do not create rows.
+Runtime reads and writes its own plugin data directory and uses isolated temporary storage for the synthetic demo. It never reads source file contents. No external network, subprocesses, external file reads, background processes, installed third-party packages, credentials or telemetry. UI requests use the authenticated Hermes backend; the Desktop query and dashboard timer poll every three seconds while mounted (the routes card every ten seconds) and stop with their host lifecycle. The same database keeps the latest routes summary (path globs and hostnames) for the routes card. Commands are capped at 32768 characters, tokenization at 4096 tokens and pipelines at 128 pipe operators. Exceeding a cap is unresolved. At most 32 sessions retain 128 recent recognized transfer records each in `<Hermes home>/plugin-data/exfilbar/egress.db`. The public `plugin_data_dir` helper follows the active profile. Session identifiers are hashed in full (up to 4096 characters), preventing the old 128-character prefix collision. Missing/invalid session IDs are not pooled; they do not write feed rows. Reload preserves the feed. Old sessions and rows are evicted by most recent write. Local copies, downloads and uncovered tools do not create rows.
 
 Each record holds UTC time, covered tool name, up to 32 workspace-relative source paths (256 characters each, with a truncation flag), scheme+host destination, decision and bounded rule metadata. Unknown sources/destinations are labeled unresolved/unknown. Destination ports and remote/URL paths are omitted from the feed. The data folder is owner-only and the database is owner read/write. SQLite secure deletion clears evicted rows; the database has an 8192-page allocation limit and a two-second lock timeout. A write failure blocks the inspected call without exposing exception details. Failure to read the feed returns an unavailable state. Retained counts can shrink on eviction. This is inspected intent, not a packet capture, byte counter, delivery receipt or a permanent audit log. File paths, hostnames and user-chosen rule metadata may themselves be sensitive and survive plugin removal in the data directory.
 

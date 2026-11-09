@@ -89,7 +89,7 @@ test('Desktop handles loading, empty, backend error, and no session', async () =
   app.selected.value = null
   assert.match(text(app.contributions[0].render()), /exfil · no session/)
   assert.match(text(app.contributions[1].render()), /Choose a chat/)
-  assert.equal(app.queries.at(-1).enabled, false)
+  assert.equal(app.queries.filter(q => q.queryKey[1] === 'exfilbar-feed').at(-1).enabled, false)
 })
 
 test('Desktop feed renders text nodes with files, destination and decision', async () => {
@@ -99,6 +99,26 @@ test('Desktop feed renders text nodes with files, destination and decision', asy
   assert.match(JSON.stringify(tree), /<script>fixture<\/script>/)
   assert.doesNotMatch(JSON.stringify(tree), /dangerouslySetInnerHTML/)
   assert.match(JSON.stringify(tree), /Delivery is not confirmed/)
+})
+
+test('Desktop routes card shows configured routes, the empty state and the not-loaded state', async () => {
+  const app = await desktop()
+  const page = () => visible(expand(app.contributions[1].render()))
+  app.result.data = { ...structuredClone(fixture), known: true, updated: now, routes: [
+    { position: 1, paths: ['reports/**'], hosts: ['uploads.example'] },
+    { position: 2, paths: ['exports/*.csv'], hosts: ['*'] }
+  ] }
+  let output = page()
+  assert.match(output, /route 1reports\/\*\*may go touploads\.example/)
+  assert.match(output, /route 2exports\/\*\.csvmay go toany destination/)
+  assert.match(output, /2 configured/)
+  app.result.data = { ...structuredClone(fixture), known: true, updated: now, routes: [] }
+  output = page()
+  assert.match(output, /No routes yet/)
+  assert.match(output, /paths: \["reports\/\*\*"\]/)
+  app.result.data = { ...structuredClone(fixture) }
+  assert.match(page(), /Routes appear here once Hermes loads Exfilbar/)
+  assert.ok(app.queries.some(q => q.queryKey.includes('/routes')))
 })
 
 async function dashboard(feed = structuredClone(fixture)) {
@@ -218,8 +238,17 @@ for (const surface of ['Desktop', 'dashboard']) {
       const cells = elements(row, 'td')
       assert.equal(visible(cells[0]), cases[i][1])
       assert.equal(cells[0].props.title, cases[i][0])
-      assert.equal(visible(cells[4]), i === 0 ? 'blocked · off route; allowed hosts: uploads.example · route 1' : i === 1 ? 'allowed · route 1, route 2' : i === 4 ? 'allowed' : 'allowed · route 1')
-      assert.equal(cells[4].props.style.color, i === 0 ? surface === 'Desktop' ? 'var(--ui-red)' : 'var(--destructive)' : 'inherit')
+      if (surface === 'Desktop') {
+        // Decision chip, then the route reference, then a block's reason on its own line.
+        const route = i === 1 ? 'route 1, route 2' : i === 4 ? '' : 'route 1'
+        const reason = i === 0 ? 'off route; allowed hosts: uploads.example' : ''
+        assert.equal(visible(cells[4]), (i === 0 ? 'blocked' : 'allowed') + route + reason)
+        const chip = elements(cells[4], 'span')[0]
+        assert.equal(chip.props.style.color, i === 0 ? 'var(--ui-red)' : 'var(--ui-green)')
+      } else {
+        assert.equal(visible(cells[4]), i === 0 ? 'blocked · off route; allowed hosts: uploads.example · route 1' : i === 1 ? 'allowed · route 1, route 2' : i === 4 ? 'allowed' : 'allowed · route 1')
+        assert.equal(cells[4].props.style.color, i === 0 ? 'var(--destructive)' : 'inherit')
+      }
     }
     assert.doesNotMatch(visible(tree), /routes\[|allowed by route|dangerouslySetInnerHTML/)
   })

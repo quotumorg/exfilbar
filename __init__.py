@@ -11,8 +11,19 @@ DEFAULTS = dict(protected_globs=['private/**', '*.env'], destination_globs=[], r
 def register(ctx):
     ledger = Ledger()
 
+    published = []
+
     def policy():
-        return Policy(**{k: ctx.get_config(k, v) for k, v in DEFAULTS.items()})
+        current = Policy(**{k: ctx.get_config(k, v) for k, v in DEFAULTS.items()})
+        snapshot = repr(current.routes)
+        if published != [snapshot]:
+            # The Desktop page shows the configured routes; a mirror failure never changes a decision.
+            try:
+                ledger.publish_routes(current.routes)
+                published[:] = [snapshot]
+            except Exception:
+                pass
+        return current
 
     def hook(tool_name, args, **ids):
         if tool_name not in ('terminal', 'execute_code'):
@@ -64,6 +75,10 @@ def register(ctx):
                 return 'Session feed unavailable. Check plugin data directory permissions and retry.'
         return '/exfil check <command> (dry run), /exfil routes, /exfil demo (fixtures), /exfil status'
 
+    try:
+        policy()
+    except Exception:
+        pass
     ctx.register_hook('pre_tool_call', hook)
     ctx.register_command('exfil', command, description='Explain per-file routes and show inspected transfers',
                          args_hint='check <command> | routes | demo | status')
