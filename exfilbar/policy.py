@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 import posixpath
-from .parse import parse, dynamic
+from .parse import parse, dynamic, Transfer, MAX_PAIRS
 from .report import allowed_hosts
 from .destinations import route_matches
 
@@ -67,7 +67,18 @@ class Policy:
     def evaluate(self, command, cwd='.'):
         return self.decide(parse(command), cwd)
 
-    def decide(self, transfers, cwd='.', static=False):
+    def over_budget(self, pairs):
+        # Bound both pair count and worst-case glob comparisons, including cold caches.
+        rules = len(self.globs) + len(self.destinations) + sum(
+            len(paths) + 3 * len(targets) for paths, targets in self.routes)
+        return pairs > MAX_PAIRS or pairs * max(1, rules) > 8192
+
+    def budget_block(self):
+        verdict = Verdict(True, 'inspection', 'too many transfer pairs to inspect; execution blocked')
+        self.inspection = ((Transfer('inspection', overflow=True), (), verdict),)
+        return verdict
+
+    def decide(self, transfers, cwd='.', static=False, normalized=None):
         """One verdict for dispatch, plus one observation per recognized record.
 
         A blocked compound tool call suppresses ALL its records. Protected
@@ -75,7 +86,14 @@ class Policy:
         rules. Unresolved syntax never acquires a route exemption.
         """
         transfers = tuple(transfers)
-        paths = [tuple(self.normalize(x, cwd) for x in t.sources) for t in transfers]
+        if any(t.overflow for t in transfers) or self.over_budget(
+                sum(max(1, len(t.sources)) for t in transfers)):
+            return self.budget_block()
+        normalized = {} if normalized is None else normalized
+        for x in dict.fromkeys(x for t in transfers for x in t.sources):
+            if x not in normalized:
+                normalized[x] = self.normalize(x, cwd)
+        paths = [tuple(normalized[x] for x in t.sources) for t in transfers]
         suffix = ' (static code text)' if static else ''
         verdict = None
         # Highest priority, even if another record matched a destination deny.

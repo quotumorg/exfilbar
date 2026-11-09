@@ -9,15 +9,17 @@ def clean(value, limit=96):
     return value[:limit]
 
 
-def destination(value):
+def destination(value, limit=96):
     # Omit URL credentials, query, fragment, and remote path.
     if '://' in value:
         try:
             parsed = urlsplit(value)
-            return clean(parsed.scheme + '://' + (parsed.hostname or 'unknown'))
+            host = parsed.scheme + '://' + (parsed.hostname or 'unknown')
+            return clean(host, limit) if limit is not None else host
         except ValueError:
             return 'unknown'
-    return clean(re.sub(r'^.*@', '', value.split('?', 1)[0].split('#', 1)[0].split(':', 1)[0]))
+    host = value.split('?', 1)[0].split('#', 1)[0].split(':', 1)[0].rsplit('@', 1)[-1]
+    return clean(host, limit) if limit is not None else host
 
 
 def route_label(value):

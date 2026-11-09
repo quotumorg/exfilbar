@@ -14,15 +14,26 @@ def register(ctx):
     published = []
 
     def policy():
-        current = Policy(**{k: ctx.get_config(k, v) for k, v in DEFAULTS.items()})
+        try:
+            current = Policy(**{k: ctx.get_config(k, v) for k, v in DEFAULTS.items()})
+        except Exception:
+            published.clear()
+            try:
+                ledger.invalidate_routes()
+            except Exception:
+                pass
+            raise
         snapshot = repr(current.routes)
         if published != [snapshot]:
-            # The Desktop page shows the configured routes; a mirror failure never changes a decision.
+            # A routes-mirror exception never changes the computed decision.
             try:
                 ledger.publish_routes(current.routes)
                 published[:] = [snapshot]
             except Exception:
-                pass
+                try:
+                    ledger.invalidate_routes()
+                except Exception:
+                    pass
         return current
 
     def hook(tool_name, args, **ids):

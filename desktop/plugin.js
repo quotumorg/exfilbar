@@ -86,17 +86,24 @@ function Routes({ ctx }) {
   ] })
   if (isError) return jsx(Card, { title: 'Your routes', children: jsx('p', { role: 'alert', children: 'Routes unavailable. Enable the backend plugin, restart the gateway, and retry.' }) })
   if (!data) return jsx(Card, { title: 'Your routes', children: jsx('p', { role: 'status', children: 'Loading routes…' }) })
-  if (!data.known) return jsx(Card, { title: 'Your routes', children: [jsx('p', { role: 'status', children: 'Routes appear here once Hermes loads Exfilbar in a session.' }, 'p'), hint] })
+  if (!data.known) return jsx(Card, { title: 'Your routes', children: [data.valid === false ? jsx('p', { role: 'alert', children: 'No valid policy has been loaded; run /exfil routes to verify settings.' }, 'warning') : null, jsx('p', { role: 'status', children: 'Routes appear here once Hermes loads Exfilbar. Enable the backend plugin, restart the gateway, then run /exfil routes.' }, 'p'), hint] })
+  const loaded = data.updated ? 'last loaded ' + new Date(data.updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : 'load time unknown'
+  const status = [
+    jsx('p', { style: { fontSize: '12px', color: FAINT }, children: 'host summary; ports and paths omitted. ' + loaded }, 'summary'),
+    data.valid === false ? jsx('p', { role: 'alert', children: 'Current settings are invalid or unavailable; showing the last valid policy.' }, 'warning') : null
+  ]
   if (!data.routes.length) {
     return jsx(Card, { title: 'Your routes', aside: 'none yet', children: [
+      ...status,
       jsx('p', { style: { margin: '0 0 8px' }, children: 'No routes yet. Protected files and destination denies still apply. A route says which files may go where:' }, 'p'),
       jsx('pre', { style: { fontFamily: MONO, fontSize: '12px', margin: 0, padding: '10px 12px', borderRadius: '8px', background: 'var(--ui-terminal-surface-background, var(--ui-bg-editor, transparent))', whiteSpace: 'pre' }, children: SAMPLE }, 'pre'),
       hint
     ] })
   }
   return jsx(Card, {
-    title: 'Your routes', aside: `${data.routes.length} configured`,
+    title: 'Last mirrored routes', aside: `${data.routes.length} configured`,
     children: [
+      ...status,
       jsx('ul', { style: { listStyle: 'none', margin: 0, padding: 0 }, children: data.routes.map(route => jsxs('li', {
         style: { display: 'grid', gridTemplateColumns: '72px 1fr', gap: '8px', padding: '6px 0', borderTop: route.position > 1 ? `1px solid ${LINE}` : 'none', alignItems: 'baseline' },
         children: [
@@ -104,7 +111,11 @@ function Routes({ ctx }) {
           jsxs('span', { style: { overflowWrap: 'anywhere' }, children: [
             jsx('span', { style: { fontFamily: MONO, fontSize: '12px' }, children: route.paths.join(', ') }),
             jsx('span', { style: { color: FAINT, margin: '0 8px' }, children: 'may go to' }),
-            jsx('span', { style: { fontFamily: MONO, fontSize: '12px' }, children: route.hosts.map(h => h === '*' ? 'any destination' : h).join(', ') })
+            jsx('span', { style: { fontFamily: MONO, fontSize: '12px' }, children: route.hosts.map(h => h === '*' ? 'any destination' : h).join(', ') }),
+            (route.paths_omitted || route.hosts_omitted || route.paths_shortened || route.hosts_shortened) ? jsx('small', {
+              style: { display: 'block', color: FAINT },
+              children: `Summary truncated: ${route.paths_omitted || 0} paths and ${route.hosts_omitted || 0} hosts omitted; ${route.paths_shortened || 0} path patterns and ${route.hosts_shortened || 0} host patterns shortened.`
+            }) : null
           ] })
         ]
       }, route.position)) }, 'ul'),
@@ -131,7 +142,7 @@ function Feed({ ctx }) {
   const message = !session ? 'Choose a chat session to see its transfers.'
     : isError ? 'Feed unavailable. Enable the backend plugin, restart the gateway, and retry.'
     : !data ? 'Loading session feed…'
-    : !data.events.length ? 'No recognized transfers inspected in this session yet. When Hermes runs an upload from the terminal or code, the attempt appears here with its decision.'
+    : !data.events.length ? 'No recognized transfers inspected in this session yet. Recognized terminal and submitted-Python transfer attempts appear here with their decision.'
     : ''
   const cell = { padding: '10px 8px', textAlign: 'left', verticalAlign: 'top', overflowWrap: 'anywhere', borderBottom: `1px solid ${LINE}` }
   const head = { ...cell, fontSize: '11px', fontWeight: 600, color: MUTED, textTransform: 'none' }
@@ -139,7 +150,7 @@ function Feed({ ctx }) {
     style: { padding: '24px 28px', color: 'var(--ui-text-primary)', height: '100%', overflow: 'auto', maxWidth: '1100px' },
     children: [
       jsx('h1', { style: { fontSize: '20px', margin: '0 0 6px' }, children: 'Exfilbar' }),
-      jsx('p', { style: { margin: '0 0 18px', color: MUTED }, children: 'Files go only where your routes allow. Delivery is not confirmed: these are inspected attempts from terminal and execute_code.' }),
+      jsx('p', { style: { margin: '0 0 18px', color: MUTED }, children: 'Recognized uploads are checked against your routes before they run. Unmatched files follow your default rules. Delivery is not confirmed.' }),
       jsx(Routes, { ctx }),
       jsx(Card, {
         title: 'This session',
@@ -163,7 +174,7 @@ function Feed({ ctx }) {
           ]
         })
       }),
-      jsx('p', { style: { fontSize: '12px', color: FAINT, margin: '4px 0 0' }, children: 'The latest 128 transfers per session are retained. Static recognition only; scripts and other tools can bypass it.' })
+      jsx('p', { style: { fontSize: '12px', color: FAINT, margin: '4px 0 0' }, children: 'Checks recognized terminal and submitted-Python transfer syntax against configured routes; not a sandbox. The latest 128 transfers per session are retained.' })
     ]
   })
 }

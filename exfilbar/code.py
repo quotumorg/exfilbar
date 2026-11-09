@@ -84,11 +84,14 @@ def inspect_code(policy, code, cwd='.'):
     # are narrower: direct HTTP calls with literal URL and inline file reads.
     literals = [n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     destinations = tuple(dict.fromkeys(x for x in literals if '://' in x))
+    if policy.over_budget(max(1, len(literals)) * max(1, len(destinations))):
+        return policy.budget_block()
     sources = []
-    for value in literals:
+    normalized = {}
+    for value in dict.fromkeys(literals):
         if '://' in value:
             continue
-        path = policy.normalize(value, cwd)
+        path = normalized[value] = policy.normalize(value, cwd)
         if path is not None and any(fnmatchcase(path, g) for g in
                 (*policy.globs, *(g for paths, _ in policy.routes for g in paths))):
             sources.append(value)
@@ -119,4 +122,4 @@ def inspect_code(policy, code, cwd='.'):
                       '://' not in url.value or not any(r in nested for r in reads))
     transfers = [Transfer('execute_code', tuple(dict.fromkeys(sources)), target, uncertain)
                  for target in (destinations or ('unknown',))]
-    return policy.decide(transfers, cwd, static=True)
+    return policy.decide(transfers, cwd, static=True, normalized=normalized)

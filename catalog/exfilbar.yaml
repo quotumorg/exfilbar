@@ -1,16 +1,16 @@
-# Draft only. Replace owner and SHA before submission. Publish plugin/ as repo root.
+# Draft only. Publisher must pin the final full commit SHA before submission.
 name: exfilbar
-repo: "https://github.com/<owner>/hermes-exfilbar"
+repo: "https://github.com/quotumorg/exfilbar"
 sha: "<40-character-commit-sha>"
 description: "Route recognized file transfers to destinations you choose and show inspected attempts."
-maintainer: "<owner>"
+maintainer: "quotumorg"
 tier: community
 category: tools
 requires_hermes: ">=0.23.0"
-version: "0.5.2"
+version: "0.5.3"
 readme: true
 platforms: ["linux", "macos"]
-known_issues: ["Static recognition only; not an egress sandbox. Sibling hook modifications can bypass inspection."]
+known_issues: ["Static recognition only; not an egress sandbox. Conservative false blocks; lexical cwd and symlink limits; uncovered tools and sibling hook modifications can bypass inspection."]
 capabilities:
   provides_tools: []
   provides_hooks: ["pre_tool_call"]

@@ -3,6 +3,8 @@ from dataclasses import dataclass, replace
 import re
 import shlex
 
+MAX_PAIRS = 1024
+
 FAMILIES = {'scp', 'rsync', 'curl', 'nc', 'netcat', 'ncat', 'wget', 'http', 'https', 'sftp', 'socat', 'ssh', 'mail', 'mailx', 'git'}
 WRAPPERS = {'sudo', 'env', 'command', 'exec', 'timeout', 'sh', 'bash', 'zsh',
             '!', 'time', 'nohup', 'nice', 'setsid'}
@@ -15,10 +17,12 @@ class Transfer:
     destination: str = 'unknown'
     unresolved: bool = False
     operation: str = ''
+    overflow: bool = False
 
 
 def remote(path):
-    return bool(re.match(r'(?:[^/\s:]+@)?[^/\s:]+:', path) or path.startswith('rsync://'))
+    head, colon, _ = path.partition(':')
+    return bool(colon and head and not any(c == '/' or c.isspace() for c in head))
 
 
 def dynamic(value):
@@ -83,6 +87,7 @@ def parse(command):
     if sum(t == '|' for t in tokens) > 128:
         return [Transfer('shell', unresolved=True)]
     records = []
+    pairs = 0
     segments, segment = [], []
     for token in tokens:
         if token and all(c in ';\n&' for c in token) or token == '||':
@@ -121,6 +126,9 @@ def parse(command):
                 found = _one(stage, tuple(reads))
                 if len(stages) > 1 and not found and name in {'nc', 'netcat', 'ncat'}:
                     found = [Transfer(name, unresolved=True)]
+                pairs += sum(max(1, len(x.sources) + (len(reads) if len(stages) > 1 else 0)) for x in found)
+                if pairs > MAX_PAIRS or any(x.overflow for x in found):
+                    return [Transfer('shell', overflow=True)]
                 if len(stages) > 1:
                     # Even an unknown producer cannot become an allowed upload.
                     found = [replace(x, sources=tuple(dict.fromkeys(x.sources + tuple(reads))),
@@ -200,7 +208,10 @@ def _one(t, piped=()):
         redirects = any(k in ('-L', '--location') and v is None for k, v in vals)
         dynamic_form = any(k in ('-F', '--form', '-T', '--upload-file', '-d', '--data', '--data-binary', '--data-urlencode') and dynamic(v) for k, v in vals)
         if sources or bad or dynamic_form:
-            return [Transfer(f, tuple(sources), target, bad or redirects or dynamic_form or dynamic(target) or not destinations or any(dynamic(x) or x in ('', '-') or x.endswith('/') for x in sources)) for target in (destinations or ['unknown'])]
+            if len(sources) * max(1, len(destinations)) > MAX_PAIRS:
+                return [Transfer(f, overflow=True)]
+            sources = tuple(sources)
+            return [Transfer(f, sources, target, bad or redirects or dynamic_form or dynamic(target) or not destinations or any(dynamic(x) or x in ('', '-') or x.endswith('/') for x in sources)) for target in (destinations or ['unknown'])]
         return []
     if f in ('nc', 'netcat', 'ncat'):
         pos, vals, bad = options(t[1:], {'-p', '-s', '-w', '-q'}, {'-l', '--listen', '-k', '-n', '-v', '-u', '-4', '-6', '-z'})
@@ -224,6 +235,8 @@ def _one(t, piped=()):
             {'-q', '--quiet', '-c', '--continue', '-S'})
         sources = piped + tuple(v for k, v in vals if k in ('--post-file', '--body-file'))
         if sources or bad:
+            if len(sources) * max(1, len(pos)) > MAX_PAIRS:
+                return [Transfer(f, overflow=True)]
             return [Transfer(f, sources, target, bad or not pos or dynamic(target) or
                              any(dynamic(x) or x == '-' for x in sources)) for target in (pos or ['unknown'])]
         return []
@@ -265,6 +278,8 @@ def _one(t, piped=()):
             attachments = tuple(v for k, v in vals if k == '-a')
             piped += attachments
             bad |= bool(attachments)
+        if len(piped) * max(1, len(destinations)) > MAX_PAIRS:
+            return [Transfer(f, overflow=True)]
         return [Transfer(f, piped, dest, bad or not piped or
                          any(dynamic(x) for x in piped) or dynamic(dest))
                 for dest in (destinations or ['unknown'])]

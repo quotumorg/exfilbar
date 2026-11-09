@@ -253,3 +253,23 @@ for (const surface of ['Desktop', 'dashboard']) {
     assert.doesNotMatch(visible(tree), /routes\[|allowed by route|dangerouslySetInnerHTML/)
   })
 }
+
+
+test('routes card exposes summary age, truncation, invalid policy and hostile text', async () => {
+  const app = await desktop()
+  app.result.data = { ...structuredClone(fixture), known: true, valid: false, updated: now, routes: [
+    { position: 1, paths: ['<script>path</script>'], hosts: ['<img src=x onerror=alert(1)>', '*'], paths_omitted: 96, hosts_omitted: 1, paths_shortened: 2, hosts_shortened: 3 }
+  ] }
+  const tree = expand(app.contributions[1].render())
+  const output = visible(tree)
+  assert.match(output, /host summary; ports and paths omitted/)
+  assert.match(output, /last loaded 07:30/)
+  assert.match(output, /last valid policy/)
+  assert.match(output, /96 paths and 1 hosts omitted; 2 path patterns and 3 host patterns shortened/)
+  assert.match(output, /any destination/)
+  assert.ok(output.includes('<script>path</script>'))
+  assert.ok(output.includes('<img src=x onerror=alert(1)>'))
+  assert.equal(elements(tree, 'script').length, 0)
+  assert.equal(elements(tree, 'img').length, 0)
+  assert.doesNotMatch(JSON.stringify(tree), /dangerouslySetInnerHTML/)
+})

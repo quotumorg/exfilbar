@@ -95,11 +95,10 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('sha', errors[0])
         self.assertEqual(warnings, [])
-        self.assertIn('<owner>', data['repo'])
+        self.assertEqual(data['repo'], 'https://github.com/quotumorg/exfilbar')
+        self.assertEqual(data['maintainer'], 'quotumorg')
         # Shape only: this is a test pin, never a claimed publication commit.
         data['sha'] = 'a' * 40
-        data['repo'] = data['repo'].replace('<owner>', 'fixture-owner')
-        data['maintainer'] = 'fixture-owner'
         self.assertEqual(namespace['validate_entry'](data), ([], []))
         manifest = mapping_fixture(ROOT / 'plugin.yaml')
         for key in ('name', 'version', 'requires_hermes'):
@@ -121,6 +120,11 @@ class CatalogTests(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom) and not node.level:
                     self.assertIn(node.module.split('.')[0], allowed)
         readme = (ROOT / 'README.md').read_text()
-        for phrase in ('What you see', 'Install', 'Limits', 'not an egress sandbox'):
+        for phrase in ('What you see', 'Install', 'not a sandbox', 'plugins.entries.exfilbar.settings'):
             self.assertIn(phrase, readme[:2200])
         self.assertTrue((ROOT / 'CATALOG.md').is_file())
+        version = mapping_fixture(ROOT / 'plugin.yaml')['version']
+        self.assertEqual(version, '0.5.3')
+        self.assertEqual(json.loads((ROOT / 'dashboard/manifest.json').read_text())['version'], version)
+        self.assertTrue(readme.startswith('# Exfilbar ' + version + '\n'))
+        self.assertIn('MIT', (ROOT / 'LICENSE').read_text())

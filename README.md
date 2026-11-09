@@ -1,6 +1,8 @@
-# Exfilbar 0.5.2
+# Exfilbar 0.5.3
 
-Choose where each file may go, and see the transfers Hermes inspects.
+Exfilbar checks recognized terminal and submitted-Python transfer syntax against configured routes; not a sandbox.
+
+Coverage is limited to recognized syntax in `terminal` and `execute_code`, not general egress enforcement. Put the settings below at `plugins.entries.exfilbar.settings` in `config.yaml`.
 
 ```yaml
 routes:
@@ -12,6 +14,15 @@ block_unresolved: true
 ```
 
 ## What you see
+
+With the route above, verify without executing a transfer:
+
+```text
+/exfil check curl -T reports/weekly.csv https://uploads.example/reports/weekly.csv
+/exfil check curl -T reports/weekly.csv https://elsewhere.example/up
+```
+
+The first returns PASS; the second returns BLOCK.
 
 1. Upload `reports/weekly.csv` to `https://uploads.example/reports/weekly.csv`. The matching route permits the recognized transfer silently.
 2. Send the same file to `https://elsewhere.example/up`. The hook blocks the tool call and names `route 1` and the allowed host `uploads.example`.
@@ -37,9 +48,9 @@ Enforcement and storage use stdlib plus the public Hermes storage helper. The op
 
 ## Alongside the Security plugin
 
-The official Security plugin (hermes-security) reviews a repository's code for weaknesses before you ship. Exfilbar reviews no code: it applies your routes at the moment Hermes is about to move a file, so an off-route transfer is stopped even when the code involved is clean.
+The official Security plugin (hermes-security) reviews repository code. Exfilbar parses recognized terminal and submitted Python transfer syntax before dispatch.
 
-They install side by side. On Hermes v0.23.0, hermes-security 0.1.2 and Exfilbar 0.5.2 were installed with `hermes plugins install` into one profile and both enabled; in the same session Exfilbar allowed the routed upload and blocked the off-route one. Security registers no `pre_tool_call` hook, so the two do not touch each other's decisions.
+Manual observation dated 2026-11-09: Hermes v0.23.0, hermes-security 0.1.2 at `85e835c`, and Exfilbar 0.5.2 were installed with `hermes plugins install` in one profile, both enabled. The routed upload was allowed and the off-route upload was blocked. Security registers no `pre_tool_call` hook. This records the supplied manual observation; this offline fix run did not repeat it or establish general non-interference.
 
 ## Use and configuration
 
@@ -69,7 +80,7 @@ Unresolved recognized transfers block by default. Explicitly setting `block_unre
 
 ## Desktop, dashboard and API
 
-Minimum Hermes: **0.23.0**, using its public plugin storage helper, slash-command context, Desktop SDK and dashboard API mount. Checked on an installed Hermes v0.23.0 with Desktop: `hermes plugins install` passes the install scan, the status chip, feed page and `/exfil` commands work. Other Hermes versions are untested.
+Minimum Hermes: **0.23.0**, using its public plugin storage helper, slash-command context, Desktop SDK and dashboard API mount. Manual observation dated 2026-11-09, supplied from installed Hermes v0.23.0 with Desktop: `hermes plugins install` passes the install scan, the status chip, feed page and `/exfil` commands work. Other Hermes versions are untested.
 
 The unified package includes `desktop/plugin.js`. After local installation, enable the Python half in `plugins.enabled`, restart the gateway to mount the API, then enable Exfilbar in Desktop's Capabilities > Plugins. Rescan if Desktop is holding a stale copy. The Desktop half defaults off, has no build step and uses only `@hermes/plugin-sdk` and `react/jsx-runtime`. It reads the focused durable session ID and polls its profile-aware namespace. When no session is focused it shows `exfil · no session`; backend errors show `exfil · unavailable`.
 
@@ -78,8 +89,8 @@ The separate web-dashboard entry is `dashboard/dist/index.js`, registered throug
 Read-only API under Hermes authentication and plugin enable/profile gates:
 
 - `GET /api/plugins/exfilbar/feed?session_id=<durable-id>` returns `{events, out, blocked, limit, notice}`.
-- `GET /api/plugins/exfilbar/sessions` returns at most 32 `{key, time}` session selectors.
-- `GET /api/plugins/exfilbar/routes` returns `{known, updated, routes}` for the page's routes card: each route's position, path globs and allowed hosts. Hosts are scheme-free hostnames; URL paths, queries, credentials and remote paths are dropped. The plugin mirrors this summary into its data folder whenever Hermes loads changed settings; a mirror failure never changes a decision.
+- `GET /api/plugins/exfilbar/sessions` provides profile-operator access to all retained profile sessions, not per-user isolation. Hashes are selectors, not authorization. It returns at most 32 `{key, time}` session selectors.
+- `GET /api/plugins/exfilbar/routes` returns `{known, updated, valid, routes}` for the page's routes card: each route's position, path globs and allowed hosts. Hosts are scheme-free hostnames; URL paths, queries, credentials and remote paths are dropped. The plugin mirrors this summary into its data folder whenever Hermes loads changed settings; a routes-mirror exception never changes the computed decision; a feed write failure blocks the call. Invalid settings retain the last valid routes and timestamp with `valid: false`. The card labels the host summary, omitted ports/paths, truncation counts and last loaded time.
 - `GET /api/plugins/exfilbar/feed?key=<64-hex-digest>` reads a selected feed. Both selectors together or an invalid selector return 400. An unavailable database returns 503 with no internal details.
 
 There is no API for commands, arbitrary file reads, changing policy or approving transfers. `/exfil demo` uses fixed synthetic timestamps and temporary storage, so repeated output is byte-identical and does not contaminate any real feed. Its two route fixtures are recorded in `demo/ROUTES-OUT.txt`.
@@ -140,7 +151,7 @@ Sibling callbacks see original args; Hermes merges `modify` directives afterward
 
 Runtime reads and writes its own plugin data directory and uses isolated temporary storage for the synthetic demo. It never reads source file contents. No external network, subprocesses, external file reads, background processes, installed third-party packages, credentials or telemetry. UI requests use the authenticated Hermes backend; the Desktop query and dashboard timer poll every three seconds while mounted (the routes card every ten seconds) and stop with their host lifecycle. The same database keeps the latest routes summary (path globs and hostnames) for the routes card. Commands are capped at 32768 characters, tokenization at 4096 tokens and pipelines at 128 pipe operators. Exceeding a cap is unresolved. At most 32 sessions retain 128 recent recognized transfer records each in `<Hermes home>/plugin-data/exfilbar/egress.db`. The public `plugin_data_dir` helper follows the active profile. Session identifiers are hashed in full (up to 4096 characters), preventing the old 128-character prefix collision. Missing/invalid session IDs are not pooled; they do not write feed rows. Reload preserves the feed. Old sessions and rows are evicted by most recent write. Local copies, downloads and uncovered tools do not create rows.
 
-Each record holds UTC time, covered tool name, up to 32 workspace-relative source paths (256 characters each, with a truncation flag), scheme+host destination, decision and bounded rule metadata. Unknown sources/destinations are labeled unresolved/unknown. Destination ports and remote/URL paths are omitted from the feed. The data folder is owner-only and the database is owner read/write. SQLite secure deletion clears evicted rows; the database has an 8192-page allocation limit and a two-second lock timeout. A write failure blocks the inspected call without exposing exception details. Failure to read the feed returns an unavailable state. Retained counts can shrink on eviction. This is inspected intent, not a packet capture, byte counter, delivery receipt or a permanent audit log. File paths, hostnames and user-chosen rule metadata may themselves be sensitive and survive plugin removal in the data directory.
+Each record holds UTC time, covered tool name, up to 32 workspace-relative source paths (256 characters each, with a truncation flag), scheme+host destination, decision and bounded rule metadata. Unknown sources/destinations are labeled unresolved/unknown. Destination ports and remote/URL paths are omitted from the feed. The data folder is owner-only and the database is owner read/write. SQLite secure deletion clears evicted rows; the database has an 8192-page allocation limit and a 25 ms lock timeout. A write failure blocks the inspected call without exposing exception details. Failure to read the feed returns an unavailable state. Retained counts can shrink on eviction. This is inspected intent, not a packet capture, byte counter, delivery receipt or a permanent audit log. File paths, hostnames and user-chosen rule metadata may themselves be sensitive and survive plugin removal in the data directory.
 
 ## Offline verification and 90-second rehearsal
 
@@ -157,10 +168,14 @@ Python tests run in one process, including a bounded concurrent-writer case. The
 
 The install-scan regression test calls the real `tools.plugin_guard.scan_plugin` from `HERMES_SOURCE` on this whole directory and requires a safe verdict with no critical/high findings. It skips with a reason when that variable is unset. Use Python 3.11+ for the Hermes v0.23.0 scanner. Demo command strings remain readable under `tests/fixtures/`, where Hermes recognizes inert test data.
 
-The integration harness imports the real dispatcher via `sys.path` and loads unmodified reducer AST definitions directly from the supplied `plugins.py`. The full manager cannot import in the available stdlib environment because `ruamel` is missing. Only test dependency plumbing supplies lifecycle routing and disables callback timeouts. Runtime code never imports internals or patches core. The execution counter stays zero for a blocked upload and increments once for local cp. This is source-level integration, not an installed-Hermes end-to-end test.
+The integration harness imports the real dispatcher via `sys.path` and loads unmodified reducer AST definitions directly from the supplied `plugins.py`. Historical 0.22.7 harness note (recorded here 2026-11-09): the full manager could not import in that stdlib environment because `ruamel` was missing. Only test dependency plumbing supplies lifecycle routing and disables callback timeouts. Runtime code never imports internals or patches core. The execution counter stays zero for a blocked upload and increments once for local cp. This is source-level integration, not an installed-Hermes end-to-end test.
 
-Set `HERMES_SOURCE` to a prepared source checkout, or place it at `../hermes` relative to this plugin directory. No private workspace layout is assumed. The r4 checks use the supplied snapshot labeled Hermes 0.22.7; an identifiable v0.23 snapshot was not found locally. The same source-contract suite is also run against v0.23.0; neither source harness is installed-host testing. A missing checkout fails rather than skips. The stdlib catalog tests execute genuine static validation functions from the supplied checkout, with a restricted reader for this bundle's YAML subset. The draft deliberately fails SHA validation until its placeholder is replaced. This is not full admission. Future admission must run `hermes plugins validate` and Plugin Doctor in a prepared environment. Full catalog validation has not been claimed; no dependency install is performed here. Source-level tests also preserve the sibling-modify bypass.
+Set `HERMES_SOURCE` to a prepared source checkout, or place it at `../hermes` relative to this plugin directory. No private workspace layout is assumed. Historical r4 checks (0.22.7 snapshot, recorded here 2026-11-09) used the supplied Hermes 0.22.7 snapshot. Current checks (2026-11-09) use the local v0.23.0 source checkout; neither source harness is installed-host testing. A missing checkout fails rather than skips. The stdlib catalog tests execute genuine static validation functions from the supplied checkout, with a restricted reader for this bundle's YAML subset. The draft deliberately fails SHA validation until its placeholder is replaced. This is not full admission. Future admission must run `hermes plugins validate` and Plugin Doctor in a prepared environment. Full catalog validation has not been claimed; no dependency install is performed here. Source-level tests also preserve the sibling-modify bypass.
 
 `demo/OUT.txt` records the deterministic fixture/dry-run table: 0-12s synthetic `private/client-export.csv`; 12-30s scp block; 30-45s rsync and multipart block; 45-58s local copy and download pass; 58-70s nc block and listener pass; 70-80s git operation rule; 80-89s offline verification and limits. No shell or network execution occurs. The fixture is `demo/workspace/private/client-export.csv`; command data lives in `tests/fixtures/cases.json`.
 
 `demo/attack.py` reads `tests/fixtures/attack.json`, calls the actual registered hook on fixture strings and writes deterministic `demo/ATTACK-OUT.txt`. The ten rows contain seven blocked attacks, a legitimate nc listener and two additional allowed controls. Every blocked row prints the reason and matched glob. This is a text rehearsal suitable for capture, not a recorded live attack or a rendered video. Keep any submitted recording under 90 seconds. The fixture output contains no test-count claim; run the suite above for the current result.
+
+Timing reference (2026-11-09): `tests/test_timing.py` uses a 100 ms per-hook-call ceiling on this machine class. Slow CI may explicitly set `EXFILBAR_TIMING_LIMIT_MS`; the default remains 100. Transfer inspection blocks conservatively above 1024 source/destination pairs or 8192 estimated rule comparisons, including submitted Python. Each distinct source is normalized once during policy decisions, and only the retained event tail is constructed.
+
+Known Desktop query identity limit: keys include profile, gateway socket status and the session-specific feed path. Gateway status is not a connection identity; equal profile names across connections and ambient request scope can mismatch. Cross-connection ownership, real query-cache deduplication and in-flight profile-switch isolation remain unverified. Do not rely on the page as proof of connection ownership.

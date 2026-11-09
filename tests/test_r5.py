@@ -301,6 +301,28 @@ class HookAndAPITests(unittest.TestCase):
             self.assertEqual(caught.exception.status_code, 400)
         self.assertNotIn('session', json.dumps(sessions))
 
+    def test_api_uses_active_profile_for_sessions_routes_and_feed(self):
+        api = self.api()
+        api.Ledger = Ledger
+        with TemporaryDirectory() as first, TemporaryDirectory() as second:
+            with patch('exfilbar.ledger.data_directory', return_value=Path(first)):
+                policy = Policy(routes=ROUTES)
+                policy.evaluate(GOOD)
+                Ledger().record('shared', 'terminal', policy.inspection)
+                Ledger().publish_routes(policy.routes)
+                self.assertEqual(api.feed('shared')['out'], 1)
+                self.assertEqual(len(api.sessions()['sessions']), 1)
+                self.assertEqual(len(api.routes()['routes']), 1)
+            with patch('exfilbar.ledger.data_directory', return_value=Path(second)):
+                self.assertEqual(api.feed('shared')['events'], [])
+                self.assertEqual(api.sessions()['sessions'], [])
+                self.assertFalse(api.routes()['known'])
+                policy.evaluate(BAD)
+                Ledger().record('shared', 'terminal', policy.inspection)
+                self.assertEqual(api.feed('shared')['blocked'], 1)
+            with patch('exfilbar.ledger.data_directory', return_value=Path(first)):
+                self.assertEqual(api.feed('shared')['blocked'], 0)
+
     def test_api_errors_do_not_leak_exception(self):
         api = self.api()
         api.Ledger = lambda: (_ for _ in ()).throw(RuntimeError('sensitive-path'))
