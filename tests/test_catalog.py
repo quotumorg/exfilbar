@@ -138,7 +138,7 @@ class CatalogTests(unittest.TestCase):
         runtime = [ROOT / '__init__.py', *sorted((ROOT / 'exfilbar').glob('*.py'))]
         allowed = {'ast', 'collections', 'dataclasses', 'fnmatch', 'json', 'pathlib',
                    'posixpath', 're', 'shlex', 'threading', 'urllib', 'contextlib', 'datetime',
-                   'hashlib', 'sqlite3', 'tempfile'}
+                   'hashlib', 'sqlite3', 'tempfile', 'weakref', 'contextvars', 'time'}
         for path in runtime:
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):

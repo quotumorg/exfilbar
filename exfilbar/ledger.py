@@ -1,17 +1,43 @@
 """Bounded metadata ledger shared by hooks, slash commands and API readers."""
 from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from pathlib import Path
 import sqlite3
+from threading import Lock
+from time import monotonic
+from weakref import WeakValueDictionary
 from .report import clean, destination, egress_destination, feed_labels
 
 MAX_EVENTS = 128
 MAX_SESSIONS = 32
 MAX_PATHS = 32
 WRITE_TIMEOUT = 0.025
+WRITE_BUDGET = 0.050
 READ_TIMEOUT = 1.0
+_write_deadline = ContextVar('exfilbar_write_deadline', default=None)
+_writer_locks = WeakValueDictionary()
+_writer_locks_guard = Lock()
+
+
+class WriterBusy(sqlite3.OperationalError):
+    # Preserve the SQLite contention contract for off-hook callers that retry.
+    # Python <3.11 runs the standalone demo but lacks named SQLite codes.
+    sqlite_errorcode = getattr(sqlite3, 'SQLITE_BUSY', 5)
+    sqlite_errorname = 'SQLITE_BUSY'
+
+
+def writer_lock(directory):
+    # Share a gate across Ledger instances, without retaining visited profiles.
+    key = str(directory.resolve() / 'egress.db')
+    with _writer_locks_guard:
+        gate = _writer_locks.get(key)
+        if gate is None:
+            gate = Lock()
+            _writer_locks[key] = gate
+        return gate
 
 
 def data_directory():
@@ -32,8 +58,9 @@ class Ledger:
         self.directory = Path(directory) if directory is not None else None
         self.clock = clock or (lambda: datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
-    def connect(self, *, read_only=False):
-        directory = self.directory if self.directory is not None else data_directory()
+    def connect(self, *, read_only=False, directory=None, timeout=WRITE_TIMEOUT):
+        if directory is None:
+            directory = self.directory if self.directory is not None else data_directory()
         path = directory / 'egress.db'
         if read_only:
             try:
@@ -44,7 +71,7 @@ class Ledger:
         else:
             directory.mkdir(parents=True, exist_ok=True)
             directory.chmod(0o700)
-            db = sqlite3.connect(path, timeout=WRITE_TIMEOUT)
+            db = sqlite3.connect(path, timeout=timeout)
         try:
             db.row_factory = sqlite3.Row
             if read_only:
@@ -63,6 +90,35 @@ class Ledger:
             raise
 
     @contextmanager
+    def write_budget(self):
+        # One writer-admission deadline per hook, including mirror failures.
+        # Context-local state prevents simultaneous calls sharing a deadline.
+        token = None
+        if _write_deadline.get() is None:
+            token = _write_deadline.set(monotonic() + WRITE_BUDGET)
+        try:
+            yield
+        finally:
+            if token is not None:
+                _write_deadline.reset(token)
+
+    @contextmanager
+    def writer(self):
+        with self.write_budget():
+            directory = self.directory if self.directory is not None else data_directory()
+            gate = writer_lock(directory)
+            remaining = lambda: max(0, _write_deadline.get() - monotonic())
+            if not gate.acquire(timeout=remaining()):
+                raise WriterBusy('writer queue timeout')
+            try:
+                # Hold through setup, transaction commit/rollback and close.
+                # Other processes still arbitrate through SQLite's <=25 ms wait.
+                with closing(self.connect(directory=directory, timeout=min(WRITE_TIMEOUT, remaining()))) as db, db:
+                    yield db
+            finally:
+                gate.release()
+
+    @contextmanager
     def reader(self):
         db = self.connect(read_only=True)
         try:
@@ -74,6 +130,7 @@ class Ledger:
     @staticmethod
     def initialize(db):
         db.executescript('''
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, touched INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT NOT NULL,
@@ -84,6 +141,7 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS routes (position INTEGER PRIMARY KEY, paths TEXT NOT NULL, hosts TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             PRAGMA user_version=1;
+            COMMIT;
         ''')
 
     def publish_routes(self, routes):
@@ -109,7 +167,7 @@ class Ledger:
                                 hosts_shortened=hosts_shortened))
             rows.append((i, json.dumps([clean(p, 256) for p in kept_paths]), json.dumps([clean(h) for h in kept_hosts])))
         encoded = json.dumps(details)
-        with closing(self.connect()) as db, db:
+        with self.writer() as db:
             db.execute('BEGIN IMMEDIATE')
             current = [tuple(r) for r in db.execute('SELECT position,paths,hosts FROM routes ORDER BY position')]
             meta = dict(db.execute('SELECT key,value FROM meta'))
@@ -123,7 +181,7 @@ class Ledger:
 
     def invalidate_routes(self):
         """Keep the last valid policy and its timestamp, but mark it stale."""
-        with closing(self.connect()) as db, db:
+        with self.writer() as db:
             db.execute("INSERT OR REPLACE INTO meta VALUES ('routes_valid', '0')")
 
     def routes(self):
@@ -157,7 +215,7 @@ class Ledger:
                          int(len(known) > MAX_PATHS or any(len(p) > 256 for p in known)),
                          egress_destination(transfer.destination, transfer.family), decision, clean(rule, 512)))
         # Only the retained tail is inserted, even for a huge compound call.
-        with closing(self.connect()) as db, db:
+        with self.writer() as db:
             db.executemany('INSERT INTO events(session,time,tool,paths,paths_truncated,destination,decision,rule) VALUES (?,?,?,?,?,?,?,?)', rows)
             last = db.execute('SELECT MAX(id) FROM events').fetchone()[0]
             db.execute('INSERT OR REPLACE INTO sessions VALUES (?,?)', (key, last))

