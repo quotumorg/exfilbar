@@ -14,6 +14,7 @@ from .report import clean, destination, egress_destination, feed_labels
 MAX_EVENTS = 128
 MAX_SESSIONS = 32
 MAX_PATHS = 32
+MAX_BATCH_WRITES = 16
 WRITE_TIMEOUT = 0.025
 WRITE_BUDGET = 0.075
 HOOK_ADMISSION_BUDGET = 0.085
@@ -152,6 +153,8 @@ class Ledger:
             if not gate.acquire(timeout=remaining()):
                 raise WriterBusy('writer queue timeout')
             try:
+                if monotonic() >= deadline:
+                    raise WriterBusy('writer queue timeout')
                 # Hold through setup, transaction commit/rollback and close.
                 # Other processes still arbitrate through SQLite's <=25 ms wait.
                 with closing(self.connect(directory=directory, timeout=min(WRITE_TIMEOUT, remaining()))) as db, db:
@@ -263,39 +266,66 @@ class Ledger:
             with batch.condition:
                 batch.pending.append(request)
                 batch.condition.notify_all()
-                while not request.done:
-                    # The oldest queued caller owns the next transaction.
-                    if not batch.active and batch.pending[0] is request:
-                        group, batch.pending = batch.pending, []
-                        batch.active = True
-                        for item in group:
-                            item.started = True
-                        break
-                    remaining = max(0, request.deadline - monotonic())
-                    if not request.started and not remaining:
+                try:
+                    while not request.done:
+                        if not batch.active:
+                            # A sleeping caller may not have processed its own
+                            # timeout yet. Never admit its expired rows.
+                            now = monotonic()
+                            pending = []
+                            for item in batch.pending:
+                                if item.deadline <= now:
+                                    item.error = WriterBusy('writer queue timeout')
+                                    item.done, item.rows = True, []
+                                else:
+                                    pending.append(item)
+                            batch.pending = pending
+                            batch.condition.notify_all()
+                            if request.done:
+                                continue
+                            # Bound work per transaction under heavy load.
+                            if batch.pending[0] is request:
+                                group = batch.pending[:MAX_BATCH_WRITES]
+                                del batch.pending[:MAX_BATCH_WRITES]
+                                batch.active = True
+                                for item in group:
+                                    item.started = True
+                                break
+                        remaining = max(0, request.deadline - monotonic())
+                        if not request.started and not remaining:
+                            raise WriterBusy('writer queue timeout')
+                        # Once admitted, wait for commit/rollback, just as the
+                        # transaction owner does. Never report success early.
+                        batch.condition.wait(None if request.started else remaining)
+                    else:
+                        if request.error is not None:
+                            raise request.error
+                        return
+                except BaseException:
+                    if request in batch.pending:
                         batch.pending.remove(request)
+                        request.rows = []
                         batch.condition.notify_all()
-                        raise WriterBusy('writer queue timeout')
-                    # Once admitted, wait for commit/rollback, just as the
-                    # transaction owner does. Never report success early.
-                    batch.condition.wait(None if request.started else remaining)
-                else:
-                    if request.error is not None:
-                        raise request.error
-                    return
+                    raise
             error = None
-            token = _write_deadline.set(min(item.deadline for item in group))
+            token = None
             try:
+                token = _write_deadline.set(min(item.deadline for item in group))
                 with self.writer(directory) as db:
                     for item in group:
                         self.record_rows(db, item.rows)
             except BaseException as exc:
                 error = exc
             finally:
-                _write_deadline.reset(token)
+                if token is not None:
+                    _write_deadline.reset(token)
                 with batch.condition:
                     for item in group:
-                        item.error, item.done = error, True
+                        # An owner's cancellation must not cancel unrelated
+                        # hooks or escape their Exception-based block handler.
+                        item.error = (sqlite3.OperationalError('writer transaction interrupted')
+                                      if error is not None and not isinstance(error, Exception) else error)
+                        item.done, item.rows = True, []
                     batch.active = False
                     batch.condition.notify_all()
             if error is not None:
