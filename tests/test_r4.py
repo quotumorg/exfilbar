@@ -1,4 +1,4 @@
-"""Offline hostile-judge regressions. Payloads are text, never executed."""
+"""Offline alias, process-launch and transfer regressions. Payloads are never executed."""
 import ast
 from pathlib import Path
 import unittest

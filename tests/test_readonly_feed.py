@@ -177,21 +177,54 @@ class ReaderTests(unittest.TestCase):
             self.assertTrue(api.routes()['valid'])
             self.assertEqual(len(api.sessions()['sessions']), 1)
 
-    def test_uninitialized_or_broken_store_is_unavailable_without_read_repair(self):
+    def test_schema_free_store_reads_empty_without_read_repair(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'egress.db'
+            ledger = Ledger(directory)
+            # A failed first writer leaves a real file but no committed schema.
+            with patch.object(Ledger, 'initialize', side_effect=sqlite3.OperationalError('fixture DDL failure')):
+                with self.assertRaises(sqlite3.OperationalError):
+                    self.populate(ledger)
+            api = self.api(ledger)
+            before = path.read_bytes()
+            self.assertEqual(api.feed('s')['events'], [])
+            self.assertEqual(api.sessions(), {'sessions': []})
+            self.assertEqual(api.routes(), dict(known=False, updated=None, valid=False, routes=[]))
+            self.assertEqual(path.read_bytes(), before)
+            # A writer owns initialization and restores the normal read path.
+            self.populate(ledger)
+            self.assertEqual(api.feed('s')['out'], 1)
+
+    def test_header_only_store_reads_empty_without_read_repair(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'egress.db'
             with closing(sqlite3.connect(path)) as db:
                 db.execute('PRAGMA user_version=0')
-            api = self.api(Ledger(directory))
             before = path.read_bytes()
-            for handler in (lambda: api.feed('s'), api.routes, api.sessions):
-                with self.assertRaises(Exception) as caught:
-                    handler()
-                self.assertEqual(caught.exception.status_code, 503)
+            ledger = Ledger(directory)
+            self.assertEqual(ledger.read('s')['events'], [])
+            self.assertEqual(ledger.sessions(), [])
+            self.assertFalse(ledger.routes()['known'])
             self.assertEqual(path.read_bytes(), before)
-            # A writer owns initialization and restores the normal read path.
-            self.populate(Ledger(directory))
-            self.assertEqual(api.feed('s')['out'], 1)
+
+    def test_partial_or_corrupt_store_still_returns_sanitized_503(self):
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt), TemporaryDirectory() as directory:
+                path = Path(directory) / 'egress.db'
+                if corrupt:
+                    path.write_bytes(b'fixture invalid database')
+                else:
+                    with closing(sqlite3.connect(path)) as db:
+                        db.execute('CREATE TABLE incomplete (id INTEGER)')
+                before = path.read_bytes()
+                api = self.api(Ledger(directory))
+                for handler in (lambda: api.feed('s'), api.routes, api.sessions):
+                    with self.assertRaises(Exception) as caught:
+                        handler()
+                    self.assertEqual(caught.exception.status_code, 503)
+                    self.assertIn('temporarily unavailable', caught.exception.detail)
+                    self.assertNotIn(directory, caught.exception.detail)
+                self.assertEqual(path.read_bytes(), before)
 
     def test_failed_writer_setup_closes_connection_and_keeps_fail_closed_hook(self):
         module = entry()

@@ -6,7 +6,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import sqlite3
-from threading import Lock
+from threading import Condition, Lock
 from time import monotonic
 from weakref import WeakValueDictionary
 from .report import clean, destination, egress_destination, feed_labels
@@ -15,10 +15,13 @@ MAX_EVENTS = 128
 MAX_SESSIONS = 32
 MAX_PATHS = 32
 WRITE_TIMEOUT = 0.025
-WRITE_BUDGET = 0.050
+WRITE_BUDGET = 0.075
+HOOK_ADMISSION_BUDGET = 0.085
 READ_TIMEOUT = 1.0
 _write_deadline = ContextVar('exfilbar_write_deadline', default=None)
+_hook_deadline = ContextVar('exfilbar_hook_deadline', default=None)
 _writer_locks = WeakValueDictionary()
+_record_batches = WeakValueDictionary()
 _writer_locks_guard = Lock()
 
 
@@ -27,6 +30,28 @@ class WriterBusy(sqlite3.OperationalError):
     # Python <3.11 runs the standalone demo but lacks named SQLite codes.
     sqlite_errorcode = getattr(sqlite3, 'SQLITE_BUSY', 5)
     sqlite_errorname = 'SQLITE_BUSY'
+
+
+class PendingWrite:
+    def __init__(self, rows, deadline):
+        self.rows, self.deadline = rows, deadline
+        self.started, self.done, self.error = False, False, None
+
+
+class RecordBatch:
+    def __init__(self):
+        self.condition = Condition()
+        self.pending, self.active = [], False
+
+
+def record_batch(directory):
+    key = str(directory.resolve() / 'egress.db')
+    with _writer_locks_guard:
+        batch = _record_batches.get(key)
+        if batch is None:
+            batch = RecordBatch()
+            _record_batches[key] = batch
+        return batch
 
 
 def writer_lock(directory):
@@ -76,6 +101,12 @@ class Ledger:
             db.row_factory = sqlite3.Row
             if read_only:
                 db.execute('PRAGMA query_only=ON')
+                # A failed first writer can leave a schema-free database.
+                # Treat only that state as empty; partial/corrupt stores and
+                # lock or I/O errors must still reach the unavailable handler.
+                if db.execute('SELECT name FROM sqlite_master LIMIT 1').fetchone() is None:
+                    db.close()
+                    return None
                 return db
             path.chmod(0o600)
             db.execute('PRAGMA secure_delete=ON')
@@ -91,23 +122,33 @@ class Ledger:
 
     @contextmanager
     def write_budget(self):
-        # One writer-admission deadline per hook, including mirror failures.
-        # Context-local state prevents simultaneous calls sharing a deadline.
-        token = None
-        if _write_deadline.get() is None:
-            token = _write_deadline.set(monotonic() + WRITE_BUDGET)
+        # Start the queue allowance lazily, but keep mirror retries and the
+        # event write inside one hook's remaining admission budget.
+        tokens = None
+        if _hook_deadline.get() is None:
+            tokens = (_hook_deadline.set(monotonic() + HOOK_ADMISSION_BUDGET),
+                      _write_deadline.set(None))
         try:
             yield
         finally:
-            if token is not None:
-                _write_deadline.reset(token)
+            if tokens is not None:
+                _write_deadline.reset(tokens[1])
+                _hook_deadline.reset(tokens[0])
+
+    @staticmethod
+    def admission_deadline():
+        if _write_deadline.get() is None:
+            _write_deadline.set(min(monotonic() + WRITE_BUDGET, _hook_deadline.get()))
+        return _write_deadline.get()
 
     @contextmanager
-    def writer(self):
+    def writer(self, directory=None):
         with self.write_budget():
-            directory = self.directory if self.directory is not None else data_directory()
+            if directory is None:
+                directory = self.directory if self.directory is not None else data_directory()
             gate = writer_lock(directory)
-            remaining = lambda: max(0, _write_deadline.get() - monotonic())
+            deadline = self.admission_deadline()
+            remaining = lambda: max(0, deadline - monotonic())
             if not gate.acquire(timeout=remaining()):
                 raise WriterBusy('writer queue timeout')
             try:
@@ -215,13 +256,60 @@ class Ledger:
                          int(len(known) > MAX_PATHS or any(len(p) > 256 for p in known)),
                          egress_destination(transfer.destination, transfer.family), decision, clean(rule, 512)))
         # Only the retained tail is inserted, even for a huge compound call.
-        with self.writer() as db:
-            db.executemany('INSERT INTO events(session,time,tool,paths,paths_truncated,destination,decision,rule) VALUES (?,?,?,?,?,?,?,?)', rows)
-            last = db.execute('SELECT MAX(id) FROM events').fetchone()[0]
-            db.execute('INSERT OR REPLACE INTO sessions VALUES (?,?)', (key, last))
-            db.execute('DELETE FROM events WHERE session=? AND id NOT IN (SELECT id FROM events WHERE session=? ORDER BY id DESC LIMIT ?)', (key, key, MAX_EVENTS))
-            db.execute('DELETE FROM sessions WHERE session NOT IN (SELECT session FROM sessions ORDER BY touched DESC LIMIT ?)', (MAX_SESSIONS,))
-            db.execute('DELETE FROM events WHERE session NOT IN (SELECT session FROM sessions)')
+        with self.write_budget():
+            directory = self.directory if self.directory is not None else data_directory()
+            batch = record_batch(directory)
+            request = PendingWrite(rows, self.admission_deadline())
+            with batch.condition:
+                batch.pending.append(request)
+                batch.condition.notify_all()
+                while not request.done:
+                    # The oldest queued caller owns the next transaction.
+                    if not batch.active and batch.pending[0] is request:
+                        group, batch.pending = batch.pending, []
+                        batch.active = True
+                        for item in group:
+                            item.started = True
+                        break
+                    remaining = max(0, request.deadline - monotonic())
+                    if not request.started and not remaining:
+                        batch.pending.remove(request)
+                        batch.condition.notify_all()
+                        raise WriterBusy('writer queue timeout')
+                    # Once admitted, wait for commit/rollback, just as the
+                    # transaction owner does. Never report success early.
+                    batch.condition.wait(None if request.started else remaining)
+                else:
+                    if request.error is not None:
+                        raise request.error
+                    return
+            error = None
+            token = _write_deadline.set(min(item.deadline for item in group))
+            try:
+                with self.writer(directory) as db:
+                    for item in group:
+                        self.record_rows(db, item.rows)
+            except BaseException as exc:
+                error = exc
+            finally:
+                _write_deadline.reset(token)
+                with batch.condition:
+                    for item in group:
+                        item.error, item.done = error, True
+                    batch.active = False
+                    batch.condition.notify_all()
+            if error is not None:
+                raise error
+
+    @staticmethod
+    def record_rows(db, rows):
+        key = rows[0][0]
+        db.executemany('INSERT INTO events(session,time,tool,paths,paths_truncated,destination,decision,rule) VALUES (?,?,?,?,?,?,?,?)', rows)
+        last = db.execute('SELECT MAX(id) FROM events').fetchone()[0]
+        db.execute('INSERT OR REPLACE INTO sessions VALUES (?,?)', (key, last))
+        db.execute('DELETE FROM events WHERE session=? AND id NOT IN (SELECT id FROM events WHERE session=? ORDER BY id DESC LIMIT ?)', (key, key, MAX_EVENTS))
+        db.execute('DELETE FROM sessions WHERE session NOT IN (SELECT session FROM sessions ORDER BY touched DESC LIMIT ?)', (MAX_SESSIONS,))
+        db.execute('DELETE FROM events WHERE session NOT IN (SELECT session FROM sessions)')
 
     def read(self, session, *, hashed=False):
         key = session if hashed else session_key(session)
