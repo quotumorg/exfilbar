@@ -46,7 +46,7 @@
         h('select', { value: selected, onChange: e => setSelected(e.target.value), style: { maxWidth: '100%', background: 'var(--background)', color: 'var(--foreground)' } },
           h('option', { value: '' }, 'Most recently inspected'),
           ...sessions.map(s => h('option', { key: s.key, value: s.key }, s.time + ' · ' + s.key.slice(0, 8))))),
-      failed ? h('p', { role: 'alert' }, 'Feed unavailable. Enable the backend plugin, restart the gateway, and retry.') : !data ? h('p', { role: 'status' }, 'Loading session feed…') : !data.events.length ? h('p', null, 'No recognized transfers inspected.') :
+      failed ? h('p', { role: 'alert' }, 'Feed temporarily unavailable. Retrying automatically. If this persists, check the backend plugin and gateway.') : !data ? h('p', { role: 'status' }, 'Loading session feed…') : !data.events.length ? h('p', null, 'No recognized transfers inspected.') :
         h('table', { style: { width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px' } },
           h('caption', { style: { textAlign: 'left', margin: '12px 0' } }, `${data.out} out · ${data.blocked} blocked · retained attempts`),
           h('thead', null, h('tr', null, ...['Time', 'Tool', 'Files', 'Destination', 'Decision / rule'].map(label => h('th', { key: label, scope: 'col', style: cell }, label)))),

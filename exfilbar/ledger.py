@@ -1,5 +1,5 @@
 """Bounded metadata ledger shared by hooks, slash commands and API readers."""
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -10,10 +10,13 @@ from .report import clean, destination, egress_destination, feed_labels
 MAX_EVENTS = 128
 MAX_SESSIONS = 32
 MAX_PATHS = 32
+WRITE_TIMEOUT = 0.025
+READ_TIMEOUT = 1.0
 
 
 def data_directory():
     # Public Hermes storage API, resolved per call to follow the active profile.
+    # This helper may create an empty directory, but never opens a database.
     from plugins.plugin_storage import plugin_data_dir
     return plugin_data_dir('exfilbar')
 
@@ -29,19 +32,44 @@ class Ledger:
         self.directory = Path(directory) if directory is not None else None
         self.clock = clock or (lambda: datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
-    def connect(self):
+    def connect(self, *, read_only=False):
         directory = self.directory if self.directory is not None else data_directory()
-        directory.mkdir(parents=True, exist_ok=True)
-        directory.chmod(0o700)
-        db = sqlite3.connect(directory / 'egress.db', timeout=0.025)
-        (directory / 'egress.db').chmod(0o600)
-        db.row_factory = sqlite3.Row
-        db.execute('PRAGMA secure_delete=ON')
-        db.execute('PRAGMA max_page_count=8192')
-        if db.execute('PRAGMA user_version').fetchone()[0] == 1:
+        path = directory / 'egress.db'
+        if read_only:
+            try:
+                path.stat()
+            except FileNotFoundError:
+                return None
+            db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=READ_TIMEOUT)
+        else:
+            directory.mkdir(parents=True, exist_ok=True)
+            directory.chmod(0o700)
+            db = sqlite3.connect(path, timeout=WRITE_TIMEOUT)
+        try:
+            db.row_factory = sqlite3.Row
+            if read_only:
+                db.execute('PRAGMA query_only=ON')
+                return db
+            path.chmod(0o600)
+            db.execute('PRAGMA secure_delete=ON')
+            db.execute('PRAGMA max_page_count=8192')
+            # Keep rollback journaling: WAL would retain evicted metadata in
+            # sidecars outside secure_delete and the database allocation cap.
+            if db.execute('PRAGMA user_version').fetchone()[0] != 1:
+                self.initialize(db)
             return db
-        self.initialize(db)
-        return db
+        except BaseException:
+            db.close()
+            raise
+
+    @contextmanager
+    def reader(self):
+        db = self.connect(read_only=True)
+        try:
+            yield db
+        finally:
+            if db is not None:
+                db.close()
 
     @staticmethod
     def initialize(db):
@@ -99,7 +127,9 @@ class Ledger:
             db.execute("INSERT OR REPLACE INTO meta VALUES ('routes_valid', '0')")
 
     def routes(self):
-        with closing(self.connect()) as db, db:
+        with self.reader() as db:
+            if db is None:
+                return {'known': False, 'updated': None, 'valid': False, 'routes': []}
             db.execute('BEGIN')
             rows = db.execute('SELECT position,paths,hosts FROM routes ORDER BY position').fetchall()
             meta = dict(db.execute('SELECT key,value FROM meta'))
@@ -141,7 +171,9 @@ class Ledger:
                   'notice': 'Inspected attempts only. Delivery is not confirmed.'}
         if not key:
             return result
-        with closing(self.connect()) as db:
+        with self.reader() as db:
+            if db is None:
+                return result
             rows = db.execute('SELECT time,tool,paths,paths_truncated,destination,decision,rule FROM events WHERE session=? ORDER BY id DESC LIMIT ?', (key, MAX_EVENTS)).fetchall()
         for row in reversed(rows):
             event = dict(row)
@@ -153,7 +185,9 @@ class Ledger:
         return result
 
     def sessions(self):
-        with closing(self.connect()) as db:
+        with self.reader() as db:
+            if db is None:
+                return []
             return [dict(row) for row in db.execute(
                 'SELECT s.session AS key, MAX(e.time) AS time FROM sessions s JOIN events e ON e.session=s.session GROUP BY s.session ORDER BY s.touched DESC LIMIT ?',
                 (MAX_SESSIONS,)).fetchall()]

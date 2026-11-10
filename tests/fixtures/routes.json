@@ -1,0 +1,7 @@
+{
+  "settings": {"routes": [{"paths": ["reports/**"], "to": ["https://uploads.example/reports/*"]}]},
+  "cases": [
+    {"name": "reports/weekly.csv to uploads.example", "command": "http https://uploads.example/reports/weekly.csv report@reports/weekly.csv", "blocked": false},
+    {"name": "reports/weekly.csv to elsewhere.example", "command": "http https://elsewhere.example/reports/weekly.csv report@reports/weekly.csv", "blocked": true}
+  ]
+}

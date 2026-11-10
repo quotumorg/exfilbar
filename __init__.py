@@ -23,7 +23,16 @@ def register(ctx):
             except Exception:
                 pass
             raise
-        snapshot = repr(current.routes)
+        # Do not serialize/mirror a policy whose matching work already exceeds
+        # the inspection budget. Even a blocked call must remain bounded.
+        if current.over_budget(1):
+            published.clear()
+            try:
+                ledger.invalidate_routes()
+            except Exception:
+                pass
+            return current
+        snapshot = current.routes
         if published != [snapshot]:
             # A routes-mirror exception never changes the computed decision.
             try:
@@ -83,7 +92,7 @@ def register(ctx):
             try:
                 return format_feed(ledger.read(ids.get('session_id')))
             except Exception:
-                return 'Session feed unavailable. Check plugin data directory permissions and retry.'
+                return 'Feed temporarily unavailable. Retry shortly; check plugin data directory permissions if this persists.'
         return '/exfil check <command> (dry run), /exfil routes, /exfil demo (fixtures), /exfil status'
 
     try:

@@ -3,6 +3,7 @@ import ast
 import json
 from pathlib import Path
 import re
+import sys
 import unittest
 from urllib.parse import urlsplit
 from support import Context, ROOT, entry
@@ -107,24 +108,54 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(data['capabilities'][key], manifest[key])
         self.assertFalse((source_root() / 'plugin-catalog/exfilbar.yaml').exists())
 
+    def test_publication_imports_use_only_documented_hermes_api(self):
+        # Hermes API used by this plugin: plugin_data_dir only (index.md:1161).
+        # Context arrives via register(ctx); no core context import is needed.
+        public_api = {'plugins.plugin_storage': {'plugin_data_dir'}}
+        local = {'exfilbar', '_exfilbar_dashboard_lib'}
+        dependencies = {'fastapi': {'APIRouter', 'HTTPException'}}
+        seen = set()
+        for path in ROOT.rglob('*.py'):
+            if 'tests' in path.relative_to(ROOT).parts:
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        self.assertIn(alias.name.split('.')[0], sys.stdlib_module_names | local,
+                                      f'{path}:{node.lineno}: {alias.name}')
+                elif isinstance(node, ast.ImportFrom) and not node.level:
+                    root = node.module.split('.')[0]
+                    if root in sys.stdlib_module_names | local:
+                        continue
+                    allowed = {**public_api, **dependencies}
+                    self.assertIn(node.module, allowed, f'{path}:{node.lineno}')
+                    self.assertLessEqual({alias.name for alias in node.names}, allowed[node.module])
+                    if node.module in public_api:
+                        seen.update((node.module, alias.name) for alias in node.names)
+        self.assertEqual(seen, {('plugins.plugin_storage', 'plugin_data_dir')})
+
     def test_runtime_imports_and_docs(self):
         runtime = [ROOT / '__init__.py', *sorted((ROOT / 'exfilbar').glob('*.py'))]
         allowed = {'ast', 'collections', 'dataclasses', 'fnmatch', 'json', 'pathlib',
                    'posixpath', 're', 'shlex', 'threading', 'urllib', 'contextlib', 'datetime',
-                   'hashlib', 'sqlite3', 'tempfile', 'plugins'}
+                   'hashlib', 'sqlite3', 'tempfile'}
         for path in runtime:
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     self.assertTrue(all(x.name.split('.')[0] in allowed for x in node.names))
                 elif isinstance(node, ast.ImportFrom) and not node.level:
-                    self.assertIn(node.module.split('.')[0], allowed)
+                    if node.module == 'plugins.plugin_storage':
+                        # Documented in website/docs/developer-guide/plugins/index.md:1161.
+                        self.assertEqual([x.name for x in node.names], ['plugin_data_dir'])
+                    else:
+                        self.assertIn(node.module.split('.')[0], allowed)
         readme = (ROOT / 'README.md').read_text()
         for phrase in ('What you see', 'Install', 'not a sandbox', 'plugins.entries.exfilbar.settings'):
-            self.assertIn(phrase, readme[:2200])
+            self.assertIn(phrase, readme[:3000])
         self.assertTrue((ROOT / 'CATALOG.md').is_file())
         version = mapping_fixture(ROOT / 'plugin.yaml')['version']
-        self.assertEqual(version, '0.5.3')
+        self.assertEqual(version, '0.5.4')
         self.assertEqual(json.loads((ROOT / 'dashboard/manifest.json').read_text())['version'], version)
         self.assertTrue(readme.startswith('# exfilbar\n\nversion ' + version + ' '))
         self.assertIn('MIT', (ROOT / 'LICENSE').read_text())

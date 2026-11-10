@@ -242,13 +242,25 @@ def _one(t, piped=()):
         return []
     if f in ('http', 'https'):
         sources = list(piped)
-        dest = next((x for x in t[1:] if '://' in x), 'unknown')
+        urls = [x for x in t[1:] if re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', x)]
+        dest = urls[0] if len(urls) == 1 else 'unknown'
+        url_set = set(urls)
+        ambiguous = False
         for x in t[1:]:
+            if x in url_set:
+                continue
             if x.startswith('@'):
                 sources.append(x[1:])
             elif ':=@' in x or '=@' in x:
                 sources.append(re.split(r':?=@', x, maxsplit=1)[1])
-        bad = any(x.startswith('-') for x in t[1:]) or dest == 'unknown'
+            elif '@' in x and not x.startswith('-'):
+                # HTTPie multipart field@file, optionally with ;type= or
+                # ;filename= metadata. Literal data/header items can contain @.
+                field, _, filename = x.partition('@')
+                if not any(c in field for c in '=:\\'):
+                    sources.append(filename.split(';', 1)[0])
+                    ambiguous |= not bool(field) or '\\' in filename
+        bad = ambiguous or any(x.startswith('-') for x in t[1:]) or len(urls) != 1
         if sources or bad:
             return [Transfer(f, tuple(sources), dest, bad or dynamic(dest) or
                              any(dynamic(x) or x in ('', '-') for x in sources))]

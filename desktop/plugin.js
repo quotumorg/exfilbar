@@ -22,17 +22,47 @@ function splitRule(rule) {
   return match ? { reason: match[1], route: match[2] } : { reason: rule || '', route: '' }
 }
 
+function currentScope(name) {
+  const owner = host.state.focusedSessionOwner?.get()
+  const connection = host.state.connectionId?.get()
+  const profile = host.state.profile.get()
+  const session = name === 'feed' ? host.state.focusedStoredSessionId.get() : ''
+  // The SDK's REST door has ambient routing only. Never read another owner
+  // through it. The SDK captures its scope synchronously when ctx.rest runs.
+  const supported = Boolean(owner?.connectionId && owner?.profile && connection &&
+    typeof host.activeConnectionId === 'function')
+  const matched = supported && owner.connectionId === connection && owner.profile === profile &&
+    (host.activeConnectionId() || 'local') === connection
+  return { connection: owner?.connectionId || '', profile: owner?.profile || '', session,
+    issue: !supported ? 'Connection ownership unavailable. Update Hermes Desktop or resolve the focused chat owner.'
+      : !matched ? 'This chat belongs to another connection or profile. Activate its gateway to read Exfilbar.' : '' }
+}
+
+function sameScope(left, right) {
+  return !right.issue && left.connection === right.connection && left.profile === right.profile && left.session === right.session
+}
+
 function useScoped(ctx, name, path, enabled, interval) {
-  const profile = useValue(host.state.profile)
-  const gateway = useValue(host.state.gateway)
-  return useQuery({
-    queryKey: [ctx.source, 'exfilbar-' + name, profile, gateway, path],
-    enabled,
-    queryFn: () => ctx.rest(path),
+  // Subscribe even when reads are suppressed so a completed activation retries.
+  useValue(host.state.profile)
+  useValue(host.state.connectionId || host.state.profile)
+  useValue(host.state.focusedSessionOwner || host.state.profile)
+  useValue(host.state.focusedStoredSessionId)
+  const scope = currentScope(name)
+  const query = useQuery({
+    queryKey: [ctx.source, 'exfilbar-' + name, scope.connection, scope.profile, scope.session, path],
+    enabled: enabled && !scope.issue,
+    queryFn: async () => {
+      if (scope.issue || !sameScope(scope, currentScope(name))) throw new Error('Exfilbar owner changed before request')
+      const data = await ctx.rest(path)
+      if (!sameScope(scope, currentScope(name))) throw new Error('Exfilbar owner changed during request')
+      return data
+    },
     refetchInterval: interval,
     staleTime: interval - 1000,
     retry: false
   })
+  return { ...query, data: scope.issue ? undefined : query.data, scopeIssue: scope.issue, scope }
 }
 
 function useFeed(ctx) {
@@ -42,11 +72,11 @@ function useFeed(ctx) {
 
 function Chip({ ctx }) {
   const session = useValue(host.state.focusedStoredSessionId)
-  const { data, isError } = useFeed(ctx)
-  const label = !session ? 'exfil · no session' : isError ? 'exfil · unavailable' : !data ? 'exfil · loading' : `exfil · ${data.out} out · ${data.blocked} blocked`
+  const { data, isError, scopeIssue } = useFeed(ctx)
+  const label = !session ? 'exfil · no session' : scopeIssue ? 'exfil · owner unavailable' : isError ? 'exfil · unavailable' : !data ? 'exfil · loading' : `exfil · ${data.out} out · ${data.blocked} blocked`
   return jsx('button', {
     type: 'button', onClick: () => host.navigate('/exfilbar'),
-    title: 'Open inspected attempts. Delivery is not confirmed.',
+    title: scopeIssue || 'Open inspected attempts. Delivery is not confirmed.',
     style: { color: data?.blocked ? RED : MUTED, padding: '2px 6px', fontSize: '11px' },
     children: label
   })
@@ -80,11 +110,12 @@ function Card({ title, aside, children }) {
 }
 
 function Routes({ ctx }) {
-  const { data, isError } = useScoped(ctx, 'routes', '/routes', true, 10000)
+  const { data, isError, scopeIssue } = useScoped(ctx, 'routes', '/routes', true, 10000)
   const hint = jsxs('p', { style: { fontSize: '12px', color: FAINT, margin: '10px 0 0' }, children: [
     'Edit routes under ', jsx(Code, { children: 'plugins.entries.exfilbar.settings' }), ' in config.yaml. ', jsx(Code, { children: '/exfil routes' }), ' prints what Hermes loaded.'
   ] })
-  if (isError) return jsx(Card, { title: 'Your routes', children: jsx('p', { role: 'alert', children: 'Routes unavailable. Enable the backend plugin, restart the gateway, and retry.' }) })
+  if (scopeIssue) return jsx(Card, { title: 'Your routes', children: jsx('p', { role: 'status', children: scopeIssue }) })
+  if (isError) return jsx(Card, { title: 'Your routes', children: jsx('p', { role: 'alert', children: 'Routes temporarily unavailable. Retrying automatically. If this persists, check the backend plugin and gateway.' }) })
   if (!data) return jsx(Card, { title: 'Your routes', children: jsx('p', { role: 'status', children: 'Loading routes…' }) })
   if (!data.known) return jsx(Card, { title: 'Your routes', children: [data.valid === false ? jsx('p', { role: 'alert', children: 'No valid policy has been loaded; run /exfil routes to verify settings.' }, 'warning') : null, jsx('p', { role: 'status', children: 'Routes appear here once Hermes loads Exfilbar. Enable the backend plugin, restart the gateway, then run /exfil routes.' }, 'p'), hint] })
   const loaded = data.updated ? 'last loaded ' + new Date(data.updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : 'load time unknown'
@@ -138,11 +169,12 @@ function Decision({ event }) {
 
 function Feed({ ctx }) {
   const session = useValue(host.state.focusedStoredSessionId)
-  const { data, isError } = useFeed(ctx)
+  const { data, isError, scopeIssue, scope } = useFeed(ctx)
   const message = !session ? 'Choose a chat session to see its transfers.'
-    : isError ? 'Feed unavailable. Enable the backend plugin, restart the gateway, and retry.'
+    : scopeIssue ? scopeIssue
+    : isError ? 'Feed temporarily unavailable. Retrying automatically. If this persists, check the backend plugin and gateway.'
     : !data ? 'Loading session feed…'
-    : !data.events.length ? 'No recognized transfers inspected in this session yet. Recognized terminal and submitted-Python transfer attempts appear here with their decision.'
+    : !data.events.length ? 'No recognized transfers inspected in this session yet. Run /exfil demo in chat for an isolated route comparison, or python3 demo/routes.py from the plugin directory. Dry runs do not populate this feed.'
     : ''
   const cell = { padding: '10px 8px', textAlign: 'left', verticalAlign: 'top', overflowWrap: 'anywhere', borderBottom: `1px solid ${LINE}` }
   const head = { ...cell, fontSize: '11px', fontWeight: 600, color: MUTED, textTransform: 'none' }
@@ -150,6 +182,7 @@ function Feed({ ctx }) {
     style: { padding: '24px 28px', color: 'var(--ui-text-primary)', height: '100%', overflow: 'auto', maxWidth: '1100px' },
     children: [
       jsx('h1', { style: { fontSize: '20px', margin: '0 0 6px' }, children: 'Exfilbar' }),
+      scope.connection && scope.profile ? jsx('p', { style: { margin: '0 0 8px', color: MUTED, overflowWrap: 'anywhere' }, children: `connection ${scope.connection} · profile ${scope.profile}` }) : null,
       jsx('p', { style: { margin: '0 0 18px', color: MUTED }, children: 'Recognized uploads are checked against your routes before they run. Unmatched files follow your default rules. Delivery is not confirmed.' }),
       jsx(Routes, { ctx }),
       jsx(Card, {

@@ -26,7 +26,7 @@ def feed(session_id: str = '', key: str = ''):
     try:
         return Ledger().read(key or session_id, hashed=bool(key))
     except Exception:
-        raise HTTPException(status_code=503, detail='Session feed unavailable') from None
+        raise HTTPException(status_code=503, detail='Feed temporarily unavailable. Retry shortly.') from None
 
 
 @router.get('/routes')
@@ -34,7 +34,7 @@ def routes():
     try:
         return Ledger().routes()
     except Exception:
-        raise HTTPException(status_code=503, detail='Routes unavailable') from None
+        raise HTTPException(status_code=503, detail='Routes temporarily unavailable. Retry shortly.') from None
 
 
 @router.get('/sessions')
@@ -42,4 +42,4 @@ def sessions():
     try:
         return {'sessions': Ledger().sessions()}
     except Exception:
-        raise HTTPException(status_code=503, detail='Session feed unavailable') from None
+        raise HTTPException(status_code=503, detail='Feed temporarily unavailable. Retry shortly.') from None

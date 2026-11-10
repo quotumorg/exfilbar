@@ -7,7 +7,7 @@ maintainer: "quotumorg"
 tier: community
 category: tools
 requires_hermes: ">=0.23.0"
-version: "0.5.3"
+version: "0.5.4"
 readme: true
 platforms: ["linux", "macos"]
 known_issues: ["Static recognition only; not an egress sandbox. Conservative false blocks; lexical cwd and symlink limits; uncovered tools and sibling hook modifications can bypass inspection."]

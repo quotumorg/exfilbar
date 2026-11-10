@@ -51,6 +51,13 @@ class Policy:
         self.unresolved = block_unresolved
         self.root = posixpath.normpath(workspace_root)
         self.inspection = ()
+        # A comparison cap alone misses cold fnmatch regex compilation. Charge
+        # wildcard syntax as work, and cap the bytes that could be compiled.
+        groups = [(self.globs, 1), (self.destinations, 1)] + [
+            group for paths, targets in self.routes for group in ((paths, 1), (targets, 3))]
+        self.rule_work = sum(weight * (1 + p.count('*') + p.count('?') + p.count('['))
+                             for patterns_, weight in groups for p in patterns_)
+        self.pattern_bytes = sum(len(p) for p in {p for patterns_, _ in groups for p in patterns_})
 
     def normalize(self, path, cwd='.'):
         if not isinstance(cwd, str) or len(cwd) > 4096 or dynamic(cwd):
@@ -69,12 +76,11 @@ class Policy:
 
     def over_budget(self, pairs):
         # Bound both pair count and worst-case glob comparisons, including cold caches.
-        rules = len(self.globs) + len(self.destinations) + sum(
-            len(paths) + 3 * len(targets) for paths, targets in self.routes)
-        return pairs > MAX_PAIRS or pairs * max(1, rules) > 8192
+        return (pairs > MAX_PAIRS or (pairs > 0 and self.pattern_bytes > 65536) or
+                pairs * max(1, self.rule_work) > 8192)
 
     def budget_block(self):
-        verdict = Verdict(True, 'inspection', 'too many transfer pairs to inspect; execution blocked')
+        verdict = Verdict(True, 'inspection', 'too many transfer pairs or complex patterns to inspect; execution blocked')
         self.inspection = ((Transfer('inspection', overflow=True), (), verdict),)
         return verdict
 

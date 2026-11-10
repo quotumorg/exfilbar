@@ -75,7 +75,7 @@ class BudgetTests(unittest.TestCase):
     def test_initialized_read_does_not_run_schema_ddl(self):
         with TemporaryDirectory() as directory:
             ledger = Ledger(directory)
-            ledger.routes()
+            ledger.publish_routes([])
             with patch.object(Ledger, 'initialize', side_effect=AssertionError('read ran DDL')):
                 ledger.routes()
                 ledger.sessions()
