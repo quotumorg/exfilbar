@@ -375,8 +375,9 @@ class Ledger:
         directory = self.directory if self.directory is not None else data_directory()
         before = snapshot(directory)
         with self.reader(directory=directory) as db:
-            if db is not None:
-                db.execute('BEGIN')
+            if db is None:
+                raise FileNotFoundError('no decision history to verify')
+            db.execute('BEGIN')
             result = verify(db, require_hmac=require_hmac)
         if before is not None and before == snapshot(directory):
             with _verified_guard:

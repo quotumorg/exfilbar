@@ -142,7 +142,11 @@ class Policy:
             for i, targets in applicable:
                 name = f'routes[{i}]'
                 if not any(route_matches(dest, target) for target in targets):
-                    return Verdict(True, f, 'off route; allowed hosts: ' + allowed_hosts(targets),
+                    hosts = allowed_hosts(targets)
+                    reason = 'off route; allowed hosts: ' + hosts
+                    if allowed_hosts((dest,)) in hosts.split(', '):
+                        reason += '; check destination scheme, path, port or user in route settings'
+                    return Verdict(True, f, reason,
                                    path=path, destination=dest, route=name)
                 matched.append(name)
         unresolved = t.unresolved or any(p is None for p in paths)

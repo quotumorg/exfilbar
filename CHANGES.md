@@ -1,5 +1,7 @@
 ## 0.5.5
 
+- Keep curl URL-encoded inline content containing @ outside file checks. Show socat hosts, explain unresolved transfers and same-host route denials, and report missing verification stores as unavailable. Broken-history output includes backup recovery guidance.
+
 - Keep upload file evidence when short flags are clustered before an operand option. Parser exceptions become unresolved records; document the final bounded coverage contract in one table.
 
 - Close silent upload recognition gaps for S3 mv/sync, s3api put-object bodies, gh gist create, gh api file fields/input, and issue/pr create body files. Literal mv follows cp routes; the other added forms retain candidate paths and block as unresolved by default. Document remaining client and directory limits.

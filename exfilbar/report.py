@@ -37,11 +37,18 @@ def feed_labels(decision, rule):
             rule = rule[len('allowed by route; '):]
     if rule == decision or (rule == 'allowed by route' and decision == 'allowed'):
         rule = ''
-    return decision, rule.replace('; route ', ' · route ')
+    return decision, explain_uncertainty(rule).replace('; route ', ' · route ')
+
+
+def explain_uncertainty(reason):
+    if reason.startswith('unresolved source'):
+        return reason.replace('unresolved source',
+            'unresolved transfer; check literal paths, destinations, options and redirects in README Coverage', 1)
+    return reason
 
 
 def format_verdict(verdict, dry_run=False):
-    fields = ['dry run' if dry_run else 'Exfilbar', 'BLOCK' if verdict.blocked else 'PASS', clean(verdict.family), clean(verdict.reason, 320)]
+    fields = ['dry run' if dry_run else 'Exfilbar', 'BLOCK' if verdict.blocked else 'PASS', clean(verdict.family), clean(explain_uncertainty(verdict.reason), 320)]
     if verdict.path:
         fields.append('path=' + clean(verdict.path))
     if verdict.pattern:
@@ -49,12 +56,15 @@ def format_verdict(verdict, dry_run=False):
     if verdict.route:
         fields.append('route=' + clean(route_label(verdict.route)))
     if verdict.destination:
-        fields.append('destination=' + destination(verdict.destination))
+        target = egress_destination(verdict.destination, 'socat') if verdict.family == 'socat' else destination(verdict.destination)
+        fields.append('destination=' + target)
     return ' | '.join(fields)[:640]
 
 
 def allowed_hosts(targets):
-    return ', '.join(dict.fromkeys(destination(t).split('://', 1)[-1] for t in targets))[:256]
+    return ', '.join(dict.fromkeys((egress_destination(t, 'socat') if
+        t.split(':', 1)[0].upper() in {'TCP', 'TCP4', 'TCP6'} else
+        destination(t)).split('://', 1)[-1] for t in targets))[:256]
 
 
 def egress_destination(value, family):

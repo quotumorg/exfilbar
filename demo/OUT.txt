@@ -9,6 +9,6 @@ beat  | fixture | verdict
 58-65 | nc file input | dry run | BLOCK | nc | protected path rule | path=private/client-export.csv | rule=private/** | destination=upload.example
 65-70 | nc listener without file input | dry run | PASS | local/unsupported | no configured outbound rule matched
 70-80 | git operation rule; payload unknown | dry run | BLOCK | git | operation rule: git push; payload unknown | rule=block_git_push | destination=configured remote
-80-89 | dynamic source; limits | dry run | BLOCK | scp | unresolved source | destination=upload.example
+80-89 | dynamic source; limits | dry run | BLOCK | scp | unresolved transfer; check literal paths, destinations, options and redirects in README Coverage | destination=upload.example
 80-89 | run the offline suite separately; source integration checks 0 blocked executions / 1 local cp
 limits | explicit shell subset; no content scanning; scripts and sibling rewrites outside coverage

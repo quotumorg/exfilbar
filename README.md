@@ -125,7 +125,7 @@ Run `/exfil verify` in Hermes, or from this checkout without Hermes running:
 python3 -m exfilbar verify --data-dir /path/to/plugin-data/exfilbar
 ```
 
-The CLI requires an explicit directory, uses read-only storage and never creates a database or key. It exits 0 for intact, 1 for broken, 2 for unavailable. For two newly recorded decisions, reproduced by `python3 demo/verify.py`:
+The CLI requires an explicit directory, uses read-only storage and never creates a database or key. A missing or schema-free database reports verification unavailable, not an intact chain. It exits 0 for intact, 1 for broken, 2 for unavailable. For two newly recorded decisions, reproduced by `python3 demo/verify.py`:
 
 ```text
 2 records, chain intact
@@ -165,7 +165,7 @@ The table is the coverage contract. Covered file transfers check known protected
 | Status | Surface | Contract |
 | --- | --- | --- |
 | Covered, routable | scp / rsync | Literal local file source(s) to `host:path` or `rsync://host/module`; recursion, dynamic operands and trailing-slash directories are unresolved. |
-| Covered, routable | curl, including FTP | `-F name=@file` or `name=<file`, `--form`, `-T file`, `--upload-file`, `-d @file`, `--data` / `--data-binary @file`, `--data-urlencode @file` or `name@file`, `-H @file` / `--header @file`; every destination operand checked. |
+| Covered, routable | curl, including FTP | `-F name=@file` or `name=<file`, `--form`, `-T file`, `--upload-file`, `-d @file`, `--data` / `--data-binary @file`, `--data-urlencode @file` or `name@file` (`=` selects inline content), `-H @file` / `--header @file`; every destination operand checked. |
 | Covered, routable | wget | `--post-file`, `--body-file`, including `--method=PUT`; every destination operand checked. |
 | Covered, routable | HTTPie http / https | Explicit URL with `@file`, `field=@file`, `field:=@file`, or multipart `field@file` with optional `;type=` / `;filename=` metadata. Accepts `--form` / `-f` / `--multipart`, `--check-status`, `--ignore-stdin`, `--print=Hh`, `--quiet` / `-q`; other flags are unresolved. |
 | Covered, routable | nc / netcat / ncat | Redirected or piped file input; listeners with explicit input are checked. Unknown client stdin is unresolved. |
@@ -186,7 +186,7 @@ The table is the coverage contract. Covered file transfers check known protected
 
 Quoted spaces and supported separate/attached/equals option forms are recognized; accepted forms remain client-specific. Short flag clusters can end in a recognized operand option, such as curl `-sSTfile`. Client-specific nested quoting can remain unresolved. Literal fd duplication/closure (`2>&1`, `1>&2`, `2>&-`, `0<&3`) and output to literal `/dev/null` preserve resolution, including leading redirects. Other file-writing redirects remain unresolved. Comments, conditionals, grouping and escaped newlines can cause conservative blocks. No shell expansion, source file inspection or directory enumeration occurs. Deep or exotic shell grouping is outside the topology guarantee; bounded fuzzing checks termination, not full shell equivalence.
 
-S3 routes name logical buckets and GitHub routes name logical repositories. Internal service redirects and hidden endpoint/host overrides are not resolved. Disabling unresolved blocking can allow unknown payloads, protected descendants under an unprotected directory operand, or file-writing redirects whose source evidence was lost. Python requests checks only literal submitted code, without following runtime redirects. Destination denies apply to recognized transfer records, not all traffic or ordinary downloads.
+S3 routes name logical buckets and GitHub routes name logical repositories. Internal service redirects and hidden endpoint/host overrides are not resolved. Disabling unresolved blocking can allow unknown payloads, protected descendants under an unprotected directory operand, or file-writing redirects whose source evidence was lost. Python requests checks only literal submitted code, without following runtime redirects. Destination denies apply to recognized transfer records, not all traffic or ordinary downloads. Unresolved messages name the whole transfer and point to this table, since uncertainty can concern a destination, option or redirect as well as a source. Same-host route denials ask the operator to check the full destination in route settings; displayed hosts intentionally omit paths, ports and users. Socat messages show the TCP host, not the address type.
 
 ## Non-terminal tool audit
 

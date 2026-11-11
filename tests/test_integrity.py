@@ -55,7 +55,7 @@ class IntegrityTests(unittest.TestCase):
     def test_mutation_reports_first_broken_index(self):
         self.record(count=3)
         self.edit("UPDATE decision_chain SET payload=replace(payload,'public/x','public/y') WHERE id=2")
-        self.assertEqual(format_verification(self.ledger.verify()), 'chain broken at index 2')
+        self.assertIn('chain broken at index 2. Preserve this store', format_verification(self.ledger.verify()))
 
     def test_record_removal_reports_first_gap(self):
         self.record(count=3)
@@ -268,7 +268,8 @@ class IntegrityTests(unittest.TestCase):
 
     def test_verify_empty_store_never_creates_files(self):
         absent = self.directory / 'absent'
-        self.assertEqual(format_verification(Ledger(absent).verify()), '0 records, chain intact')
+        with self.assertRaises(FileNotFoundError):
+            Ledger(absent).verify()
         self.assertFalse(absent.exists())
 
     def test_registered_command_and_setting(self):

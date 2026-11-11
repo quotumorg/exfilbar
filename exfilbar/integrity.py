@@ -183,4 +183,6 @@ def format_verification(result):
         text += f"; {result['signed']} HMAC records checked with the local key"
     if result.get('hint'):
         text += '. ' + result['hint']
+    elif not result['intact']:
+        text += '. Preserve this store for inspection; restore a matching trusted database/key backup to recover.'
     return text

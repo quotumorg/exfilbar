@@ -304,7 +304,7 @@ def _one(t, piped=()):
                     # Do not mistake those quotes or escapes for pathname bytes.
                     bad |= any(c in payload[1:] for c in ('\"', "'", '\\'))
                     sources.extend(payload[1:].split(';')[0].split(','))
-            elif k == '--data-urlencode' and '@' in v:
+            elif k == '--data-urlencode' and '@' in v and '=' not in v:
                 sources.append(v.split('@', 1)[1])
             elif k in ('-d', '--data', '--data-binary', '-H', '--header') and v.startswith('@'):
                 sources.append(v[1:])
