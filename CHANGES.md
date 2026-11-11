@@ -1,5 +1,7 @@
 ## 0.5.5
 
+- Document the existing-install update command, restart checks and preservation of settings and legacy history.
+
 - Keep curl URL-encoded inline content containing @ outside file checks. Show socat hosts, explain unresolved transfers and same-host route denials, and report missing verification stores as unavailable. Broken-history output includes backup recovery guidance.
 
 - Keep upload file evidence when short flags are clustered before an operand option. Parser exceptions become unresolved records; document the final bounded coverage contract in one table.

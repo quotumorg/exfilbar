@@ -76,6 +76,17 @@ Hermes 0.23.0 or later. Allow roughly 5-9 minutes with Hermes already installed;
 
 The installed dispatch walkthrough is for the operator to run. The shipped offline demo and tests do not establish installed Desktop behavior. For the separate protected-file rehearsal, run `python3 demo/attack.py` from the checkout; it also inspects fixture strings without executing transfers.
 
+### Upgrade from 0.5.4
+
+For an existing installation, use the update command in the same active profile:
+
+```sh
+hermes plugins update exfilbar
+hermes plugins list
+```
+
+Confirm version 0.5.5 is installed and enabled, then restart the gateway and existing CLI chats and repeat steps 5 and 6 above. Updating follows the published repository revision; it does not install this checkout or an unpublished release. Keep the existing `plugins.entries.exfilbar.settings` and plugin data directory. Do not reinstall or delete the ledger to upgrade. The first recorded decision migrates the existing history, preserving retained legacy rows as unverified. HMAC is opt-in and defaults to false; see [Decision integrity](#decision-integrity) before enabling it or verifying a sealed store.
+
 ## Limits at a glance
 
 This is not an egress sandbox. It recognizes a bounded shell/Python subset. Scripts, hidden call targets, copied secrets, symlinks, browser/MCP tools and later sibling-hook argument modifications can bypass it. Unresolved recognized transfers block by default and can reject legitimate work. Only `terminal` and `execute_code` are inspected. No contents are read and no cross-call provenance is tracked.
