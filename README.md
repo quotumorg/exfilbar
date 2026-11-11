@@ -1,6 +1,6 @@
 # exfilbar
 
-Version 0.5.4 · community plugin for Hermes Agent, not by Nous
+Version 0.5.5 · community plugin for Hermes Agent, not by Nous
 
 ![exfilbar: route 1 lets reports/** go to uploads.example; partners.example is off route and blocked](docs/banner.png)
 
@@ -86,7 +86,7 @@ Enforcement and storage use stdlib plus the public Hermes storage helper. The op
 
 The official Security plugin (hermes-security) reviews repository code. Exfilbar parses recognized terminal and submitted Python transfer syntax before dispatch.
 
-Historical project notes dated 2026-11-09 report a routed pass and off-route block with Hermes v0.23.0 and hermes-security 0.1.2 at `85e835c`. Those notes disagree on the Exfilbar pin, 0.5.2 or 0.5.3, and no captured co-install log or reproducible co-install test ships here. The reported absence of a Security `pre_tool_call` hook is not proof of non-interference. Co-install behavior for 0.5.4 is unverified.
+Historical project notes dated 2026-11-09 report a routed pass and off-route block with Hermes v0.23.0 and hermes-security 0.1.2 at `85e835c`. Those notes disagree on the Exfilbar pin, 0.5.2 or 0.5.3, and no captured co-install log or reproducible co-install test ships here. The reported absence of a Security `pre_tool_call` hook is not proof of non-interference. Co-install behavior for 0.5.5 is unverified.
 
 ## Use and configuration
 
@@ -151,7 +151,7 @@ The separate web-dashboard entry is `dashboard/dist/index.js`, registered throug
 
 Read-only API under Hermes authentication and plugin enable/profile gates:
 
-- `GET /api/plugins/exfilbar/feed?session_id=<durable-id>` returns `{events, out, blocked, limit, notice}`.
+- `GET /api/plugins/exfilbar/feed?session_id=<durable-id>` returns `{events, out, blocked, limit, notice}`, plus optional `chain` metadata for a cached explicit verification of the unchanged store.
 - `GET /api/plugins/exfilbar/sessions` provides profile-operator access to all retained profile sessions, not per-user isolation. Hashes are selectors, not authorization. It returns at most 32 `{key, time}` session selectors.
 - `GET /api/plugins/exfilbar/routes` returns `{known, updated, valid, routes}` for the page's routes card: each route's position, path globs and allowed hosts. Hosts are scheme-free hostnames; URL paths, queries, credentials and remote paths are dropped. The plugin mirrors this summary into its data folder whenever Hermes loads changed settings; a routes-mirror exception never changes the computed decision; a feed write failure blocks the call. Invalid settings retain the last valid routes and timestamp with `valid: false`. The card labels the host summary, omitted ports/paths, truncation counts and last loaded time.
 - `GET /api/plugins/exfilbar/feed?key=<64-hex-digest>` reads a selected feed. Both selectors together or an invalid selector return 400. An unavailable database returns 503 with a temporary-unavailable message and no internal details; both UIs retry automatically.
@@ -176,7 +176,7 @@ There is no API for commands, arbitrary file reads, changing policy or approving
 | execute_code | submitted Python calls through requests/httpx/urllib/socket/ftplib/paramiko/http.client/smtplib/aiohttp/websockets plus protected path literals; static check only |
 | git | opt-in `git push` operation rule |
 
-Quoted spaces and common attached/equals options are recognized. Comments, conditionals, grouping and ambiguous quote/control syntax can cause conservative blocks. Unknown options, dynamic sources, substitutions, wrappers, unsupported redirects, explicit recursion and earlier directory changes remain unresolved and block by default. Escaped newlines in recognized transfers and common wrappers such as time/nohup are conservative unresolved syntax. Mail/mailx attachment flags are ambiguous across dialects and are unresolved, with their operand also checked as a candidate file. No shell expansion or file inspection occurs. Unknown pipeline producers feeding recognized transfers also block by default.
+Quoted spaces and common attached/equals options are recognized. Comments, conditionals, grouping and ambiguous quote/control syntax can cause conservative blocks. Literal fd duplication/closure (`2>&1`, `1>&2`, `2>&-`, `0<&3`) and output redirects to literal `/dev/null` are ignored for transfer resolution, including `>/dev/null 2>&1`. Redirects that write files remain visible as unresolved syntax. Unknown options, dynamic sources, substitutions, wrappers, unsupported redirects, explicit recursion and earlier directory changes remain unresolved and block by default. Escaped newlines in recognized transfers and common wrappers such as time/nohup are conservative unresolved syntax. Mail/mailx attachment flags are ambiguous across dialects and are unresolved, with their operand also checked as a candidate file. No shell expansion or file inspection occurs. Unknown pipeline producers feeding recognized transfers also block by default.
 
 Remote-to-local scp/rsync, rsync dry runs, local copies, git pull, ordinary wget downloads, `curl -o` downloads, literal `--form-string` and bare netcat listeners pass. SSH sessions, SFTP downloads, unsupported HTTPie flags and ordinary client network calls without a known literal source can be conservatively blocked. Recognized curl/wget uploads check every destination operand. Curl upload redirects are unresolved because the final destination is unknown. Destination rules apply to recognized transfer records, not all traffic or ordinary downloads. The policy is designed around a bounded subset, not full command compatibility.
 
@@ -247,6 +247,10 @@ Set `HERMES_SOURCE` to a prepared source checkout, or place it at `../hermes` re
 Timing reference (2026-11-10): `tests/test_timing.py` uses a 100 ms per-hook-call ceiling on this machine class. Slow CI may explicitly set `EXFILBAR_TIMING_LIMIT_MS`; the default remains 100. Transfer inspection blocks conservatively above 1024 source/destination pairs or a weighted 8192-comparison budget that charges wildcard syntax, including submitted Python. Cold-pattern work also blocks above 65536 distinct pattern characters. These are conservative inspection limits, even with unresolved transfers explicitly allowed. A policy exceeding the one-transfer budget is not mirrored: its previous summary is marked unavailable until settings recover. Each distinct source is normalized once during policy decisions, and only the retained event tail is constructed.
 
 Desktop reads share the SDK query cache: chip and page use the same feed key, with feed polling every 3 seconds and routes every 10 seconds while observed. There is no plugin-owned timer. The Node tests use the host checkout's already-installed TanStack Query core for cache isolation, in-flight switches, observer deduplication and disposal. This is a source/SDK harness, not installed Desktop verification or a visual test. The full-store Python benchmark reads routes, feed and session selectors with 32 sessions x 128 events and a concurrent writer; its timings are local reference measurements, not a service-level guarantee.
+
+## 0.5.5
+
+Harmless fd redirects preserve upload routes. New decision records have an append-only hash chain, optional local HMAC and offline verification, with legacy migration and unchanged feed layout. Unattended denials are documented and tested as blocking directives. See [CHANGES.md](CHANGES.md).
 
 ## 0.5.4
 

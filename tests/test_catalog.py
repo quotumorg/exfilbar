@@ -156,7 +156,7 @@ class CatalogTests(unittest.TestCase):
             self.assertIn(phrase, readme[:3000])
         self.assertTrue((ROOT / 'CATALOG.md').is_file())
         version = mapping_fixture(ROOT / 'plugin.yaml')['version']
-        self.assertEqual(version, '0.5.4')
+        self.assertEqual(version, '0.5.5')
         self.assertEqual(json.loads((ROOT / 'dashboard/manifest.json').read_text())['version'], version)
         self.assertTrue(readme.startswith('# exfilbar\n\nVersion ' + version + ' '))
         self.assertIn('MIT', (ROOT / 'LICENSE').read_text())

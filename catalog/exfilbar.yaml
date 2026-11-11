@@ -7,10 +7,10 @@ maintainer: "quotumorg"
 tier: community
 category: tools
 requires_hermes: ">=0.23.0"
-version: "0.5.4"
+version: "0.5.5"
 readme: true
 platforms: ["linux", "macos"]
-known_issues: ["Static recognition only; not an egress sandbox. Conservative false blocks; lexical cwd and symlink limits; uncovered tools and sibling hook modifications can bypass inspection."]
+known_issues: ["Static recognition only; not an egress sandbox. Conservative false blocks; lexical cwd and symlink limits; uncovered tools and sibling hook modifications can bypass inspection. Decision history survives feed eviction; database-cap exhaustion blocks new recorded calls. Optional HMAC authenticates to the local key owner, not a third party."]
 capabilities:
   provides_tools: []
   provides_hooks: ["pre_tool_call"]
