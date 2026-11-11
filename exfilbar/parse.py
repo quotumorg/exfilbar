@@ -69,6 +69,23 @@ def options(tokens, operands, flags):
                 values.append((token[:2], token[2:]))
             elif not eq and (key in flags or (not token.startswith('--') and all('-' + c in flags for c in token[1:]))):
                 values.extend((flag, None) for flag in ([key] if key in flags else ['-' + c for c in token[1:]]))
+            elif not token.startswith('--'):
+                # A short flag cluster may end with a value-taking option,
+                # e.g. curl -sSTfile or scp -qP 2222. Preserve that operand.
+                for offset, char in enumerate(token[1:], 2):
+                    short = '-' + char
+                    if short in operands:
+                        value = token[offset:]
+                        if not value:
+                            i += 1
+                            value = tokens[i] if i < len(tokens) else ''
+                        values.append((short, value))
+                        bad |= not bool(value)
+                        break
+                    if short not in flags:
+                        bad = True
+                        break
+                    values.append((short, None))
             else:
                 bad = True
         else:
@@ -132,6 +149,15 @@ def ignore_output_redirects(command):
 
 def parse(command):
     """Return transfer records, never expand a token or inspect a source file."""
+    try:
+        return _parse(command)
+    except Exception:
+        # Keep unexpected recognizer failures inside the policy boundary too.
+        # Never turn a partially inspected upload into an empty record list.
+        return [Transfer('shell', unresolved=True)]
+
+
+def _parse(command):
     if len(command) > 32768:
         return [Transfer('shell', unresolved=True)]
     # POSIX shells remove escaped newlines before recognizing command names.
