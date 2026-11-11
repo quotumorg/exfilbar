@@ -30,11 +30,22 @@ def dynamic(value):
 
 
 def covered_command(tokens):
-    """Only the upload subcommands of gh/aws belong to this recognizer."""
+    """Recognize bounded upload shapes without blocking ordinary client reads."""
     family = tokens[0].rsplit('/', 1)[-1]
-    pair = {'gh': ['release', 'upload'], 'aws': ['s3', 'cp']}.get(family)
-    return family in FAMILIES and (pair is None or any(
-        tokens[i:i + 2] == pair for i in range(1, len(tokens) - 1)))
+    if family == 'aws':
+        return any(tokens[i:i + 2] in (['s3', 'cp'], ['s3', 'mv'],
+                   ['s3', 'sync'], ['s3api', 'put-object'])
+                   for i in range(1, len(tokens) - 1))
+    if family == 'gh':
+        return (any(tokens[i:i + 2] in (['release', 'upload'], ['gist', 'create'])
+                    for i in range(1, len(tokens) - 1)) or
+                ('api' in tokens[1:] and any('=@' in x or x == '--input' or
+                    x.startswith('--input=') for x in tokens[1:])) or
+                any(tokens[i:i + 2] in (['issue', 'create'], ['pr', 'create'])
+                    for i in range(1, len(tokens) - 1)) and any(
+                    x in ('-F', '--body-file') or x.startswith(('--body-file=', '-F'))
+                    for x in tokens[1:]))
+    return family in FAMILIES
 
 
 def options(tokens, operands, flags):
@@ -375,8 +386,30 @@ def _one(t, piped=()):
         sources = tuple(x.split('#', 1)[0] for x in pos[1:])
         return [Transfer(f, sources, dest, bad or not match or len(pos) < 2 or
                          dynamic(pos[0]) or any(not x or dynamic(x) or x.endswith('/') for x in sources))]
-    if f == 'aws' and any(t[i:i + 2] == ['s3', 'cp'] for i in range(1, len(t) - 1)):
-        i = next(i for i in range(1, len(t) - 1) if t[i:i + 2] == ['s3', 'cp'])
+    if f == 'gh':
+        pos, vals, bad = options(t[1:],
+            {'-R', '--repo', '-d', '--desc', '-f', '--raw-field', '-F', '--field',
+             '--input', '--body-file', '-t', '--title', '-b', '--body',
+             '-H', '--header', '-X', '--method', '--hostname'},
+            {'--public', '--private', '--web', '--silent', '--include'})
+        if 'gist' in pos and 'create' in pos:
+            # Gist identity is assigned remotely, so no route can be proved.
+            sources = tuple(pos[pos.index('create') + 1:])
+        else:
+            sources = tuple(v for k, v in vals if k in ('--input', '--body-file') or
+                            k == '-F' and 'api' not in pos)
+            if 'api' in pos:
+                sources += tuple(v.split('=@', 1)[1] for k, v in vals
+                                 if k in ('-F', '--field') and '=@' in v)
+        return [Transfer(f, sources, unresolved=True)]
+    if f == 'aws' and any(t[i:i + 2] == ['s3api', 'put-object'] for i in range(1, len(t) - 1)):
+        # Body is a local filename, unlike most s3api JSON parameters. Keep
+        # this operation unresolved rather than inventing endpoint semantics.
+        pos, vals, bad = options(t[1:], {'--body', '--bucket', '--key',
+            '--profile', '--region', '--endpoint-url'}, {'--no-cli-pager', '--no-sign-request'})
+        return [Transfer(f, tuple(v for k, v in vals if k == '--body'), unresolved=True)]
+    if f == 'aws':
+        i = next(i for i in range(1, len(t) - 1) if t[i] == 's3' and t[i + 1] in ('cp', 'mv', 'sync'))
         pos, vals, bad = options(t[1:i] + t[i + 2:],
             {'--profile', '--region', '--endpoint-url', '--content-type', '--acl', '--storage-class',
              '--exclude', '--include', '--cli-connect-timeout', '--cli-read-timeout'},
@@ -392,7 +425,7 @@ def _one(t, piped=()):
         if endpoints:
             dest = endpoints[-1]
         return [Transfer(f, sources, dest, bad or len(pos) != 2 or bool(endpoints) or
-                         any(k == '--recursive' for k, v in vals) or not dest.startswith('s3://') or
+                         t[i + 1] == 'sync' or any(k == '--recursive' for k, v in vals) or not dest.startswith('s3://') or
                          dynamic(dest) or any(not x or x == '-' or dynamic(x) or x.endswith('/') for x in sources))]
     if f == 'git':
         # Global git options are deliberately unresolved rather than guessed.
