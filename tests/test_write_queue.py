@@ -124,6 +124,9 @@ class WriteQueueTests(unittest.TestCase):
                 self.assertEqual(ledger.read(key, hashed=True)['out'], count)
             self.assertEqual(ledger.read('0')['events'], [])
             self.assertEqual(ledger.read('31')['out'], 128)
+            verified = ledger.verify()
+            self.assertTrue(verified['intact'])
+            self.assertEqual(verified['records'], 32 + 1 + 18 * 128)
             self.assertFalse(batch.active)
             self.assertEqual(batch.pending, [])
 

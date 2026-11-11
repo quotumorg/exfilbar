@@ -28,6 +28,10 @@ config_schema:
     type: bool
     default: true
     description: "Block unresolved recognized transfers. Disable explicitly at your risk."
+  integrity_hmac:
+    type: bool
+    default: false
+    description: "Seal new decision records with a local key. Once enabled, later records stay sealed."
   workspace_root:
     type: str
     default: "."

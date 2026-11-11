@@ -112,6 +112,16 @@ test('Desktop feed renders text nodes with files, destination and decision', asy
   assert.match(JSON.stringify(tree), /Delivery is not confirmed/)
 })
 
+test('Desktop shows only the explicit verification status supplied by the feed', async () => {
+  const app = await desktop()
+  assert.doesNotMatch(text(app.contributions[1].render()), /chain intact/)
+  app.result.data.chain = { intact: true, records: 2 }
+  assert.match(text(app.contributions[1].render()), /chain intact · 2/)
+  app.result.data.chain = { intact: false, records: 0, broken: 1 }
+  assert.match(text(app.contributions[1].render()), /chain broken · index 1/)
+  assert.doesNotMatch(text(app.contributions[0].render()), /chain/)
+})
+
 test('Desktop routes card shows configured routes, the empty state and the not-loaded state', async () => {
   const app = await desktop()
   const page = () => visible(expand(app.contributions[1].render()))
@@ -175,6 +185,19 @@ test('dashboard lists sessions and loads feed through authenticated SDK fetcher'
   assert.match(text(app.render()), /1 out · 1 blocked/)
   cleanup()
   assert.equal(app.timers.size, 0)
+})
+
+test('dashboard adds the same small verification status to its caption', async () => {
+  const feed = { ...structuredClone(fixture), chain: { intact: true, records: 2 } }
+  const app = await dashboard(feed)
+  app.render()
+  const cleanup = app.effect()
+  await tick()
+  assert.match(text(app.render()), /chain intact · 2/)
+  feed.chain = { intact: false, records: 0, broken: 1 }
+  await app.timers.get(1)()
+  assert.match(text(app.render()), /chain broken · index 1/)
+  cleanup()
 })
 
 test('dashboard isolates stale asynchronous responses after cleanup', async () => {

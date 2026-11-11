@@ -187,7 +187,7 @@ function Feed({ ctx }) {
       jsx(Routes, { ctx }),
       jsx(Card, {
         title: 'This session',
-        aside: data && !message ? `${data.out} out · ${data.blocked} blocked` : undefined,
+        aside: data && !message ? `${data.out} out · ${data.blocked} blocked` + (data.chain ? (data.chain.intact ? ` · chain intact · ${data.chain.records}` : ` · chain broken · index ${data.chain.broken}`) : '') : undefined,
         children: message ? jsx('p', { role: isError ? 'alert' : 'status', style: { margin: 0, color: isError ? RED : 'inherit' }, children: message }) : jsxs('table', {
           style: { width: '100%', fontSize: '13px', borderCollapse: 'collapse', tableLayout: 'fixed' },
           children: [

@@ -1,6 +1,7 @@
 """Bounded metadata ledger shared by hooks, slash commands and API readers."""
 from contextlib import closing, contextmanager
 from contextvars import ContextVar
+from collections import OrderedDict
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -10,6 +11,7 @@ from threading import Condition, Lock
 from time import monotonic
 from weakref import WeakValueDictionary
 from .report import clean, destination, egress_destination, feed_labels
+from .integrity import append_records, verify
 
 MAX_EVENTS = 128
 MAX_SESSIONS = 32
@@ -24,6 +26,22 @@ _hook_deadline = ContextVar('exfilbar_hook_deadline', default=None)
 _writer_locks = WeakValueDictionary()
 _record_batches = WeakValueDictionary()
 _writer_locks_guard = Lock()
+_verified = OrderedDict()
+_verified_guard = Lock()
+
+
+def snapshot(directory):
+    path = directory / 'egress.db'
+    try:
+        info = path.stat()
+        try:
+            key = (directory / 'integrity.key').lstat()
+            key_stamp = (key.st_ino, key.st_size, key.st_mtime_ns, key.st_ctime_ns, key.st_mode)
+        except FileNotFoundError:
+            key_stamp = None
+        return (str(path.resolve()), info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, key_stamp)
+    except FileNotFoundError:
+        return None
 
 
 class WriterBusy(sqlite3.OperationalError):
@@ -37,6 +55,12 @@ class PendingWrite:
     def __init__(self, rows, deadline):
         self.rows, self.deadline = rows, deadline
         self.started, self.done, self.error = False, False, None
+
+
+class PreparedRows(list):
+    def __init__(self, signed):
+        super().__init__()
+        self.signed = signed
 
 
 class RecordBatch:
@@ -114,7 +138,7 @@ class Ledger:
             db.execute('PRAGMA max_page_count=8192')
             # Keep rollback journaling: WAL would retain evicted metadata in
             # sidecars outside secure_delete and the database allocation cap.
-            if db.execute('PRAGMA user_version').fetchone()[0] != 1:
+            if db.execute('PRAGMA user_version').fetchone()[0] != 2:
                 self.initialize(db)
             return db
         except BaseException:
@@ -163,8 +187,8 @@ class Ledger:
                 gate.release()
 
     @contextmanager
-    def reader(self):
-        db = self.connect(read_only=True)
+    def reader(self, *, directory=None):
+        db = self.connect(read_only=True, directory=directory)
         try:
             yield db
         finally:
@@ -184,7 +208,11 @@ class Ledger:
             CREATE INDEX IF NOT EXISTS events_session ON events(session, id);
             CREATE TABLE IF NOT EXISTS routes (position INTEGER PRIMARY KEY, paths TEXT NOT NULL, hosts TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS decision_chain (
+                id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL UNIQUE,
+                payload TEXT NOT NULL, prev TEXT NOT NULL, hash TEXT NOT NULL,
+                hmac TEXT NOT NULL);
+            PRAGMA user_version=2;
             COMMIT;
         ''')
 
@@ -241,11 +269,11 @@ class Ledger:
                 'routes': [dict(position=r['position'], paths=json.loads(r['paths']), hosts=json.loads(r['hosts']),
                                 **(details[i] if i < len(details) else {})) for i, r in enumerate(rows)]}
 
-    def record(self, session, tool, inspection):
+    def record(self, session, tool, inspection, *, integrity_hmac=False):
         key = session_key(session)
         if not key or not inspection:
             return
-        rows = []
+        rows = PreparedRows(integrity_hmac)
         for transfer, paths, verdict in inspection[-MAX_EVENTS:]:
             known = list(dict.fromkeys(p for p in paths if p is not None))
             decision = 'blocked' if verdict.blocked else ('allowed by route' if verdict.route else 'allowed')
@@ -334,12 +362,29 @@ class Ledger:
     @staticmethod
     def record_rows(db, rows):
         key = rows[0][0]
-        db.executemany('INSERT INTO events(session,time,tool,paths,paths_truncated,destination,decision,rule) VALUES (?,?,?,?,?,?,?,?)', rows)
+        if not db.in_transaction:
+            db.execute('BEGIN IMMEDIATE')
+        append_records(db, rows, rows.signed)
         last = db.execute('SELECT MAX(id) FROM events').fetchone()[0]
         db.execute('INSERT OR REPLACE INTO sessions VALUES (?,?)', (key, last))
         db.execute('DELETE FROM events WHERE session=? AND id NOT IN (SELECT id FROM events WHERE session=? ORDER BY id DESC LIMIT ?)', (key, key, MAX_EVENTS))
         db.execute('DELETE FROM sessions WHERE session NOT IN (SELECT session FROM sessions ORDER BY touched DESC LIMIT ?)', (MAX_SESSIONS,))
         db.execute('DELETE FROM events WHERE session NOT IN (SELECT session FROM sessions)')
+
+    def verify(self, *, require_hmac=False):
+        directory = self.directory if self.directory is not None else data_directory()
+        before = snapshot(directory)
+        with self.reader(directory=directory) as db:
+            if db is not None:
+                db.execute('BEGIN')
+            result = verify(db, require_hmac=require_hmac)
+        if before is not None and before == snapshot(directory):
+            with _verified_guard:
+                _verified[before[0]] = (before, dict(result))
+                _verified.move_to_end(before[0])
+                while len(_verified) > MAX_SESSIONS:
+                    _verified.popitem(last=False)
+        return result
 
     def read(self, session, *, hashed=False):
         key = session if hashed else session_key(session)
@@ -347,10 +392,20 @@ class Ledger:
                   'notice': 'Inspected attempts only. Delivery is not confirmed.'}
         if not key:
             return result
-        with self.reader() as db:
+        directory = self.directory if self.directory is not None else data_directory()
+        before = snapshot(directory)
+        with self.reader(directory=directory) as db:
             if db is None:
                 return result
+            db.execute('BEGIN')
             rows = db.execute('SELECT time,tool,paths,paths_truncated,destination,decision,rule FROM events WHERE session=? ORDER BY id DESC LIMIT ?', (key, MAX_EVENTS)).fetchall()
+        # Polling must not hold a rollback-journal read lock for a full audit.
+        # Show only an explicit verification of this unchanged database image.
+        if before is not None and before == snapshot(directory):
+            with _verified_guard:
+                cached = _verified.get(before[0])
+                if cached is not None and cached[0] == before:
+                    result['chain'] = dict(cached[1])
         for row in reversed(rows):
             event = dict(row)
             event['paths'] = json.loads(event['paths'])
@@ -371,6 +426,9 @@ class Ledger:
 
 def format_feed(feed):
     lines = [f"Session feed: {len(feed['events'])} recent transfers; {feed['out']} out; {feed['blocked']} blocked. Retained limit {feed['limit']}.", feed['notice']]
+    chain = feed.get('chain')
+    if chain and (chain['records'] or not chain['intact']):
+        lines.append(f"chain intact · {chain['records']}" if chain['intact'] else f"chain broken · index {chain['broken']}")
     for event in feed['events']:
         paths = ', '.join(event['paths']) or 'unresolved'
         if event['paths_truncated']:

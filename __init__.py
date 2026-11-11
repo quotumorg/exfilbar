@@ -3,6 +3,7 @@ from .exfilbar.policy import Policy, Verdict
 from .exfilbar.code import inspect_code
 from .exfilbar.ledger import Ledger, format_feed
 from .exfilbar.report import format_verdict
+from .exfilbar.integrity import format_verification
 
 DEFAULTS = dict(protected_globs=['private/**', '*.env'], destination_globs=[], routes=[],
                 block_git_push=False, block_unresolved=True, workspace_root='.')
@@ -53,7 +54,11 @@ def register(ctx):
         if tool_name not in ('terminal', 'execute_code'):
             return None
         inspection = ()
+        integrity_hmac = False
         try:
+            integrity_hmac = ctx.get_config('integrity_hmac', False)
+            if not isinstance(integrity_hmac, bool):
+                raise ValueError('invalid integrity setting')
             key = 'command' if tool_name == 'terminal' else 'code'
             if not isinstance(args, dict) or not isinstance(args.get(key), str):
                 raise ValueError('invalid tool arguments')
@@ -70,7 +75,7 @@ def register(ctx):
             # ourselves, without echoing exception text or invalid settings.
             verdict = Verdict(True, tool_name, 'policy error or invalid arguments; execution blocked')
         try:
-            ledger.record(ids.get('session_id'), tool_name, inspection)
+            ledger.record(ids.get('session_id'), tool_name, inspection, integrity_hmac=integrity_hmac)
         except Exception:
             verdict = Verdict(True, tool_name, 'session feed unavailable; execution blocked')
         if verdict.blocked:
@@ -97,7 +102,15 @@ def register(ctx):
                 return format_feed(ledger.read(ids.get('session_id')))
             except Exception:
                 return 'Feed temporarily unavailable. Retry shortly; check plugin data directory permissions if this persists.'
-        return '/exfil check <command> (dry run), /exfil routes, /exfil demo (fixtures), /exfil status'
+        if raw_args.strip() == 'verify':
+            try:
+                require_hmac = ctx.get_config('integrity_hmac', False)
+                if not isinstance(require_hmac, bool):
+                    raise ValueError('invalid integrity setting')
+                return format_verification(ledger.verify(require_hmac=require_hmac))
+            except Exception:
+                return 'Verification unavailable. Check the plugin data directory; no integrity claim can be made.'
+        return '/exfil check <command> (dry run), /exfil routes, /exfil demo (fixtures), /exfil status, /exfil verify'
 
     try:
         policy()
@@ -105,4 +118,4 @@ def register(ctx):
         pass
     ctx.register_hook('pre_tool_call', hook)
     ctx.register_command('exfil', command, description='Explain per-file routes and show inspected transfers',
-                         args_hint='check <command> | routes | demo | status')
+                         args_hint='check <command> | routes | demo | status | verify')

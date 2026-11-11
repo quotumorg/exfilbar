@@ -48,7 +48,7 @@
           ...sessions.map(s => h('option', { key: s.key, value: s.key }, s.time + ' · ' + s.key.slice(0, 8))))),
       failed ? h('p', { role: 'alert' }, 'Feed temporarily unavailable. Retrying automatically. If this persists, check the backend plugin and gateway.') : !data ? h('p', { role: 'status' }, 'Loading session feed…') : !data.events.length ? h('p', null, 'No recognized transfers inspected.') :
         h('table', { style: { width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px' } },
-          h('caption', { style: { textAlign: 'left', margin: '12px 0' } }, `${data.out} out · ${data.blocked} blocked · retained attempts`),
+          h('caption', { style: { textAlign: 'left', margin: '12px 0' } }, `${data.out} out · ${data.blocked} blocked · retained attempts` + (data.chain ? (data.chain.intact ? ` · chain intact · ${data.chain.records}` : ` · chain broken · index ${data.chain.broken}`) : '')),
           h('thead', null, h('tr', null, ...['Time', 'Tool', 'Files', 'Destination', 'Decision / rule'].map(label => h('th', { key: label, scope: 'col', style: cell }, label)))),
           h('tbody', null, ...[...data.events].reverse().map((e, i) => h('tr', { key: i },
             ...[localTime(e.time), e.tool, (e.paths.join(', ') || 'unresolved') + (e.paths_truncated ? ' (truncated)' : ''), e.destination, e.decision + (e.rule ? ' · ' + e.rule : '')].map((value, j) => h('td', { key: j, title: j === 0 ? e.time : undefined, style: { ...cell, color: j === 4 && e.decision === 'blocked' ? 'var(--destructive)' : 'inherit', fontVariantNumeric: 'tabular-nums' } }, value)))))),

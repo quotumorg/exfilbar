@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,18 @@ CASES = json.loads((ROOT / 'tests/fixtures/attack.json').read_text())
 
 
 def render():
+    # The rehearsal must never consult an installed Hermes home, including
+    # the routes mirror published during registration.
+    original = plugin.Ledger
+    with TemporaryDirectory(prefix='exfilbar-attack-demo-') as directory:
+        plugin.Ledger = lambda: original(directory)
+        try:
+            return _render()
+        finally:
+            plugin.Ledger = original
+
+
+def _render():
     ctx = Context()
     plugin.register(ctx)
     lines = ['EXFILBAR | ATTACKER VS DEFENDER',

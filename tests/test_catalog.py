@@ -79,7 +79,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(data['provides_tools'], [])
         self.assertEqual(data['python_dependencies'], [])
         self.assertEqual(set(data['config_schema']), set(__import__('inspect').signature(
-            __import__('exfilbar.policy', fromlist=['Policy']).Policy).parameters))
+            __import__('exfilbar.policy', fromlist=['Policy']).Policy).parameters) | {'integrity_hmac'})
 
     def test_catalog_source_contract_and_placeholders(self):
         path = source_root() / 'scripts/validate_plugin_catalog.py'
@@ -138,7 +138,8 @@ class CatalogTests(unittest.TestCase):
         runtime = [ROOT / '__init__.py', *sorted((ROOT / 'exfilbar').glob('*.py'))]
         allowed = {'ast', 'collections', 'dataclasses', 'fnmatch', 'json', 'pathlib',
                    'posixpath', 're', 'shlex', 'threading', 'urllib', 'contextlib', 'datetime',
-                   'hashlib', 'sqlite3', 'tempfile', 'weakref', 'contextvars', 'time'}
+                   'hashlib', 'sqlite3', 'tempfile', 'weakref', 'contextvars', 'time',
+                   'argparse', 'hmac', 'os', 'secrets'}
         for path in runtime:
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):

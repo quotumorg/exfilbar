@@ -196,6 +196,9 @@ class ConcurrentWriterTests(unittest.TestCase):
                     return max(elapsed)
                 maximum = max(maximum, *pool.map(write, range(16)))
                 self.assertEqual(Ledger(directory).read('parallel')['out'], 48)
+                verified = Ledger(directory).verify()
+                self.assertTrue(verified['intact'])
+                self.assertEqual(verified['records'], 48)
         self.assertLess(maximum, 0.1)
         print(f'WRITERS | 20 fresh stores x 16 writers x 3 rounds | {maximum * 1000:.3f} ms maximum')
 
@@ -223,6 +226,9 @@ class ConcurrentWriterTests(unittest.TestCase):
         self.assertLess(maximum, 0.1)
         feed = module.Ledger().read('parallel')
         self.assertEqual((feed['out'], feed['blocked']), (8, 8))
+        verified = module.Ledger().verify()
+        self.assertTrue(verified['intact'])
+        self.assertEqual(verified['records'], 16)
         print(f'WRITERS | 16 registered hooks, cold store | {maximum * 1000:.3f} ms maximum')
 
     def test_queue_timeout_fails_closed_and_recovers(self):
