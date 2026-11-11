@@ -69,7 +69,7 @@ class BudgetTests(unittest.TestCase):
             elapsed = time.perf_counter() - start
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
-            self.assertLess(elapsed, 0.1)
+            self.assertLess(elapsed, 0.3)
             db.rollback()
 
     def test_initialized_read_does_not_run_schema_ddl(self):

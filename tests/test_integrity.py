@@ -72,6 +72,19 @@ class IntegrityTests(unittest.TestCase):
         self.assertTrue(self.ledger.verify()['intact'])
         self.assertEqual(self.ledger.verify(require_hmac=True)['broken'], 1)
 
+    def test_hmac_requirement_rejects_a_legacy_only_replacement(self):
+        self.record(signed=True)
+        self.edit("DELETE FROM meta WHERE key LIKE 'chain_%'")
+        self.edit('DELETE FROM decision_chain')
+        for old_schema in (False, True):
+            if old_schema:
+                self.edit('DROP TABLE decision_chain')
+            with self.subTest(old_schema=old_schema):
+                self.assertEqual(self.ledger.verify()['legacy'], 1)
+                result = self.ledger.verify(require_hmac=True)
+                self.assertFalse(result['intact'])
+                self.assertEqual(result['broken'], 1)
+
     def test_suffix_removal_checks_committed_head(self):
         self.record(count=3)
         self.edit('DELETE FROM decision_chain WHERE id=3')
@@ -83,6 +96,34 @@ class IntegrityTests(unittest.TestCase):
         self.record(count=3)
         self.edit("UPDATE decision_chain SET prev='0' WHERE id=1")
         self.assertEqual(self.ledger.verify()['broken'], 1)
+
+    def test_signed_suffix_removal_with_adjusted_head_is_detected(self):
+        self.record(signed=True, count=3)
+        with self.ledger.reader() as db:
+            head = db.execute('SELECT hash FROM decision_chain WHERE id=2').fetchone()[0]
+        self.edit('DELETE FROM decision_chain WHERE id=3')
+        self.edit('DELETE FROM events WHERE id=3')
+        self.edit("UPDATE meta SET value='2' WHERE key='chain_count'")
+        self.edit("UPDATE meta SET value=? WHERE key='chain_head'", (head,))
+        self.assertEqual(self.ledger.verify()['broken'], 3)
+        with self.assertRaises(ValueError):
+            self.record(signed=True)
+
+    def test_key_permission_changes_and_symlinks_fail_closed(self):
+        self.record(signed=True)
+        key = self.directory / 'integrity.key'
+        key.chmod(0o644)
+        self.assertFalse(self.ledger.verify()['intact'])
+        with self.assertRaises(ValueError):
+            self.record()
+        key.chmod(0o600)
+        self.assertTrue(self.ledger.verify()['intact'])
+        saved = self.directory / 'saved.key'
+        key.rename(saved)
+        key.symlink_to(saved)
+        self.assertFalse(self.ledger.verify()['intact'])
+        with self.assertRaises(OSError):
+            self.record()
 
     def test_retained_feed_edits_are_detected(self):
         self.record(count=3)

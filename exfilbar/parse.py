@@ -63,7 +63,7 @@ def ignore_output_redirects(command):
 
     Work on shell text before shlex loses quoting and fd adjacency. In
     particular, a quoted "2" before >&1 is still an argument, not an fd.
-    File writes and input redirects remain visible to the conservative parser.
+    File writes and file-input redirects remain visible to the conservative parser.
     """
     pieces, start, word, quote, i = [], 0, 0, '', 0
     boundaries = ' \t\r\n;&|<>()'
@@ -173,7 +173,8 @@ def parse(command):
             if not stage:
                 continue
             name = stage[0].rsplit('/', 1)[-1]
-            if '<' in stage and (name == '<' or name.isdigit()):
+            if (name in {'<', '>', '>>', '>&', '<&', '&>', '&>>', '>|'} or
+                    name.isdigit() and any(x in stage for x in ('<', '>', '>>', '>&', '<&', '>|'))):
                 if any(x.rsplit('/', 1)[-1] in FAMILIES for x in stage):
                     records.append(Transfer('shell', unresolved=True))
             if name in FAMILIES:
@@ -225,7 +226,7 @@ def _one(t, piped=()):
             return [Transfer(f, unresolved=True)]
         del t[i:i + 2]
     piped = tuple(redirected)
-    controls = {'|', '||', '>', '>>', '<<', '(', ')', '<', '>&', '<&'}
+    controls = {'|', '||', '>', '>>', '<<', '(', ')', '<', '>&', '<&', '&>', '&>>', '>|'}
     if any(x in controls - ({'<'} if f in ('nc', 'netcat') else set()) for x in t[1:]):
         return [Transfer(f, unresolved=True)]
     if f in ('scp', 'rsync'):

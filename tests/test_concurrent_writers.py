@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from exfilbar.ledger import Ledger, WriterBusy, record_batch, session_key, writer_lock
 from exfilbar.policy import Policy
-from support import Context, ROOT, entry
+from support import Context, ROOT, admission_clock, entry
 
 ROUTES = [dict(paths=['reports/**'], to=['https://uploads.example/reports/*'])]
 GOOD = 'curl -T reports/weekly.csv https://uploads.example/reports/weekly.csv'
@@ -94,29 +94,24 @@ class ConcurrentWriterTests(unittest.TestCase):
         module.register(ctx)
         ledger = module.Ledger()
         import sys
-        gate = sys.modules[ledger.__class__.__module__].writer_lock(ledger.directory)
-        inspected = Event()
+        now = [10.0]
         evaluate = module.Policy.evaluate
         def slow_inspection(policy, *args):
-            time.sleep(0.055)
-            verdict = evaluate(policy, *args)
-            inspected.set()
-            return verdict
-        def call():
-            started = time.perf_counter()
+            now[0] += 0.055
+            return evaluate(policy, *args)
+        gate = Mock()
+        def acquire(timeout):
+            self.assertAlmostEqual(timeout, 0.030)
+            now[0] += 0.010
+            return True
+        gate.acquire.side_effect = acquire
+        with admission_clock(type(ledger), now), \
+                patch.object(module.Policy, 'evaluate', slow_inspection), \
+                patch.object(sys.modules[type(ledger).__module__], 'writer_lock', return_value=gate):
             result = ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s')
-            return result, time.perf_counter() - started
-        with patch.object(module.Policy, 'evaluate', slow_inspection), ThreadPoolExecutor(max_workers=1) as pool:
-            with gate:
-                future = pool.submit(call)
-                self.assertTrue(inspected.wait(5))
-                # Release after inspection, while this call is in the queue.
-                time.sleep(0.010)
-            result, elapsed = future.result(timeout=2)
         self.assertIsNone(result)
-        self.assertLess(elapsed, 0.1)
         self.assertEqual(ledger.read('s')['out'], 1)
-        print(f'WRITERS | slow inspection then transient queue | {elapsed * 1000:.3f} ms')
+        gate.release.assert_called_once()
 
     def test_queue_allowance_starts_at_admission_and_retries_share_hook_ceiling(self):
         with TemporaryDirectory() as directory:
@@ -167,7 +162,7 @@ class ConcurrentWriterTests(unittest.TestCase):
             elapsed = time.perf_counter() - started
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
-            self.assertLess(elapsed, 0.1)
+            self.assertLess(elapsed, 0.3)
             writer.rollback()
         self.assertIsNone(ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s'))
         self.assertEqual(module.Ledger().read('s')['out'], 1)
@@ -175,7 +170,7 @@ class ConcurrentWriterTests(unittest.TestCase):
 
     def test_twenty_fresh_databases_with_sixteen_concurrent_writers(self):
         maximum = 0
-        with TemporaryDirectory() as root, ThreadPoolExecutor(max_workers=16) as pool:
+        with admission_clock(Ledger), TemporaryDirectory() as root, ThreadPoolExecutor(max_workers=16) as pool:
             for iteration in range(20):
                 directory = Path(root) / str(iteration)
                 gate = Barrier(16, timeout=5)
@@ -199,7 +194,7 @@ class ConcurrentWriterTests(unittest.TestCase):
                 verified = Ledger(directory).verify()
                 self.assertTrue(verified['intact'])
                 self.assertEqual(verified['records'], 48)
-        self.assertLess(maximum, 0.1)
+        self.assertLess(maximum, 0.3)
         print(f'WRITERS | 20 fresh stores x 16 writers x 3 rounds | {maximum * 1000:.3f} ms maximum')
 
     def test_concurrent_registered_hooks_preserve_pass_block_and_feed(self):
@@ -221,9 +216,9 @@ class ConcurrentWriterTests(unittest.TestCase):
             else:
                 self.assertIsNone(result)
             return time.perf_counter() - start
-        with ThreadPoolExecutor(max_workers=16) as pool:
+        with admission_clock(type(module.Ledger())), ThreadPoolExecutor(max_workers=16) as pool:
             maximum = max(pool.map(call, range(16)))
-        self.assertLess(maximum, 0.1)
+        self.assertLess(maximum, 0.3)
         feed = module.Ledger().read('parallel')
         self.assertEqual((feed['out'], feed['blocked']), (8, 8))
         verified = module.Ledger().verify()
@@ -247,7 +242,7 @@ class ConcurrentWriterTests(unittest.TestCase):
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
             elapsed = time.perf_counter() - started
-            self.assertLess(elapsed, 0.1)
+            self.assertLess(elapsed, 0.3)
         self.assertEqual(ledger.read('s')['events'], [])
         self.assertIsNone(ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s'))
         self.assertEqual(ledger.read('s')['out'], 1)

@@ -33,11 +33,26 @@ class RedirectTests(unittest.TestCase):
     def test_file_writes_stay_visible_and_cannot_gain_a_route_pass(self):
         for form in FORMS:
             for redirect in ('>log 2>&1', '2>log', '>>log', '2>&log',
-                             '> /dev/null/other', '>"/dev/null"', '>&$FD'):
+                             '> /dev/null/other', '>"/dev/null"', '>&$FD',
+                             '&>log', '&>>log', '>|log', '&>/dev/null', '<<EOF\nx\nEOF'):
                 with self.subTest(form=form, redirect=redirect):
                     command = form.format(host='good') + ' ' + redirect
                     self.assertTrue(any(t.unresolved for t in parse(command)))
                     self.assertTrue(Policy(routes=ROUTES).evaluate(command).blocked)
+
+    def test_redirects_before_executable_and_destination(self):
+        for form in FORMS:
+            for host in ('good', 'bad'):
+                command = form.format(host=host)
+                for redirected in ('2>/dev/null ' + command,
+                                   command.replace(host, '2>/dev/null ' + host) if '://' not in command else
+                                   command.replace('https://', '2>/dev/null https://')):
+                    with self.subTest(command=redirected):
+                        self.assertEqual(parse(redirected), parse(command))
+                        self.assertEqual(Policy(routes=ROUTES).evaluate(redirected).blocked, host == 'bad')
+                for prefix in ('>log ', '2>log ', '&>log ', '>|log '):
+                    with self.subTest(prefix=prefix, command=command):
+                        self.assertTrue(Policy(routes=ROUTES).evaluate(prefix + command).blocked)
 
     def test_quoting_adjacency_and_command_boundaries(self):
         for text in ('echo "2>&1"', "echo '>/dev/null'", r'echo 2\>\&1',

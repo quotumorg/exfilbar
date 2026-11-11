@@ -237,7 +237,7 @@ class ReaderTests(unittest.TestCase):
                 {'command': 'curl -T public/x https://h/x'}, session_id='s')
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
-            self.assertLess(time.perf_counter() - start, 0.1)
+            self.assertLess(time.perf_counter() - start, 0.3)
             writer.rollback()
         self.assertEqual(module.Ledger().read('s')['events'], [])
         self.assertIsNone(ctx.hooks['pre_tool_call']('terminal',

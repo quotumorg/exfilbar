@@ -139,7 +139,7 @@ class CatalogTests(unittest.TestCase):
         allowed = {'ast', 'collections', 'dataclasses', 'fnmatch', 'json', 'pathlib',
                    'posixpath', 're', 'shlex', 'threading', 'urllib', 'contextlib', 'datetime',
                    'hashlib', 'sqlite3', 'tempfile', 'weakref', 'contextvars', 'time',
-                   'argparse', 'hmac', 'os', 'secrets'}
+                   'argparse', 'hmac', 'os', 'secrets', 'stat'}
         for path in runtime:
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):

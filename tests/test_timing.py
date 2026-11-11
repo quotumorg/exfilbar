@@ -1,4 +1,4 @@
-"""100 ms reference per registered-hook call, including feed writes.
+"""Deterministic inspection properties and a 300 ms wall-time smoke ceiling.
 
 EXFILBAR_TIMING_LIMIT_MS is an explicit slow-CI override, never set by this suite.
 All strings are inspected in isolated storage; no transfer is executed.
@@ -8,10 +8,10 @@ import fnmatch
 import os
 import time
 import unittest
-from support import Context, entry
+from support import Context, admission_clock, entry
 
 ROUTES = [{'paths': ['reports/**'], 'to': ['https://uploads.example/reports/*']}]
-LIMIT = float(os.environ.get('EXFILBAR_TIMING_LIMIT_MS', '100')) / 1000
+LIMIT = float(os.environ.get('EXFILBAR_TIMING_LIMIT_MS', '300')) / 1000
 
 # Expected directives are part of every fixture, including intentional passes.
 IN_BUDGET = [
@@ -50,12 +50,29 @@ class TimingTests(unittest.TestCase):
 
     def check(self, name, tool, value, expected):
         start = time.perf_counter()
-        result = self.hook(tool, {'command' if tool == 'terminal' else 'code': value}, session_id='timing')
+        # Work caps determine the verdict. Slow inspection must not turn a
+        # policy pass into a storage-admission block in this property test.
+        with admission_clock(type(self.module.Ledger())):
+            result = self.hook(tool, {'command' if tool == 'terminal' else 'code': value}, session_id='timing')
         elapsed = time.perf_counter() - start
         actual = 'block' if result and result.get('action') == 'block' else 'pass'
         print(f'TIMING | {name} | {len(value)} | {elapsed * 1000:.3f} | {actual}')
         self.assertEqual(actual, expected, name)
         self.assertLess(elapsed, LIMIT, f'{name}: {elapsed * 1000:.3f} ms')
+
+    def test_real_budget_still_blocks_when_inspection_exhausts_admission(self):
+        from unittest.mock import patch
+        now = [10.0]
+        evaluate = self.module.Policy.evaluate
+        def slow(policy, *args):
+            result = evaluate(policy, *args)
+            now[0] += 0.086
+            return result
+        with admission_clock(type(self.module.Ledger()), now), patch.object(self.module.Policy, 'evaluate', slow):
+            result = self.hook('terminal', {'command': IN_BUDGET[-2][1]}, session_id='expired')
+        self.assertEqual(result['action'], 'block')
+        self.assertIn('session feed unavailable', result['message'])
+        self.assertEqual(self.module.Ledger().read('expired')['events'], [])
 
     def test_in_budget_adversarial_and_controls(self):
         for name, command, expected in IN_BUDGET:

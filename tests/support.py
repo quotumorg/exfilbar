@@ -28,3 +28,10 @@ class Context:
         self.hooks[name] = callback
     def register_command(self, name, callback, **kwargs):
         self.commands[name] = callback
+
+
+def admission_clock(ledger_type, now=None):
+    """Inject only the ledger deadline clock; elapsed measurements stay real."""
+    from unittest.mock import patch
+    now = [10.0] if now is None else now
+    return patch.object(sys.modules[ledger_type.__module__], 'monotonic', lambda: now[0])

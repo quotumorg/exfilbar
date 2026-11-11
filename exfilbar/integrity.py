@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import stat
 
 FIELDS = ('session', 'time', 'tool', 'paths', 'paths_truncated',
           'destination', 'decision', 'rule')
@@ -27,12 +28,24 @@ def local_key(db, *, create=False):
         else:
             with os.fdopen(descriptor, 'wb') as output:
                 output.write(secrets.token_bytes(32))
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                info.st_mode & 0o077):
+            raise ValueError('unsafe local integrity key permissions')
         key = source.read(33)
     if len(key) != 32:
         raise ValueError('invalid local integrity key')
     return key
+
+
+def head_mac(meta, key):
+    # Authenticate the current prefix length as well as its last record. Record
+    # HMACs alone let a database editor shorten history and adjust its head.
+    head = {name: meta[name] for name in ('chain_install', 'chain_legacy',
+            'chain_count', 'chain_head', 'chain_signed')}
+    return hmac.new(key, canonical(head), sha256).hexdigest()
 
 
 def append_records(db, rows, signed=False):
@@ -53,6 +66,8 @@ def append_records(db, rows, signed=False):
     signed = signed or meta['chain_signed'] == '1'
     key = local_key(db, create=meta['chain_signed'] != '1') if signed else None
     if meta['chain_signed'] == '1':
+        if not hmac.compare_digest(head_mac(meta, key), meta.get('chain_seal', '')):
+            raise ValueError('authenticated decision chain head mismatch')
         last = db.execute('SELECT payload,hmac FROM decision_chain WHERE id=?', (count,)).fetchone()
         if last is None or not hmac.compare_digest(
                 hmac.new(key, last['payload'].encode('utf-8'), sha256).hexdigest(), last['hmac']):
@@ -71,6 +86,8 @@ def append_records(db, rows, signed=False):
                    (count, cursor.lastrowid, payload.decode('utf-8'), prev, digest, mac))
         prev = digest
     meta.update(chain_count=str(count), chain_head=prev, chain_signed='1' if signed else '0')
+    if signed:
+        meta['chain_seal'] = head_mac(meta, key)
     db.executemany('INSERT OR REPLACE INTO meta VALUES (?,?)', meta.items())
 
 
@@ -84,11 +101,15 @@ def verify(db, *, require_hmac=False):
         if db.execute("SELECT 1 FROM meta WHERE key LIKE 'chain_%' LIMIT 1").fetchone() is not None:
             return dict(result, intact=False, broken=1)
         result['legacy'] = db.execute('SELECT COUNT(*) FROM events').fetchone()[0]
+        if require_hmac and result['legacy']:
+            result.update(intact=False, broken=1)
         return result
     meta = dict(db.execute("SELECT key,value FROM meta WHERE key LIKE 'chain_%'"))
     if 'chain_install' not in meta:
         if not meta and db.execute('SELECT 1 FROM decision_chain LIMIT 1').fetchone() is None:
             result['legacy'] = db.execute('SELECT COUNT(*) FROM events').fetchone()[0]
+            if require_hmac and result['legacy']:
+                result.update(intact=False, broken=1)
             return result
         return dict(result, intact=False, broken=1)
     index, key = 1, None
@@ -130,6 +151,8 @@ def verify(db, *, require_hmac=False):
         if (int(meta['chain_count']) != result['records'] or meta['chain_head'] != prev or
                 (meta['chain_signed'] == '1') != bool(result['signed'])):
             raise ValueError('broken head')
+        if result['signed'] and not hmac.compare_digest(head_mac(meta, key), meta.get('chain_seal', '')):
+            raise ValueError('broken authenticated head')
         if require_hmac and result['records'] and not result['signed']:
             index = 1
             raise ValueError('authentication required')
