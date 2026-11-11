@@ -29,6 +29,14 @@ def dynamic(value):
     return any(c in value for c in '$`*?[]~{}')
 
 
+def covered_command(tokens):
+    """Only the upload subcommands of gh/aws belong to this recognizer."""
+    family = tokens[0].rsplit('/', 1)[-1]
+    pair = {'gh': ['release', 'upload'], 'aws': ['s3', 'cp']}.get(family)
+    return family in FAMILIES and (pair is None or any(
+        tokens[i:i + 2] == pair for i in range(1, len(tokens) - 1)))
+
+
 def options(tokens, operands, flags):
     """Return positionals, option values, uncertainty; unknown options fail closed."""
     pos, values, bad = [], [], False
@@ -175,7 +183,8 @@ def parse(command):
             name = stage[0].rsplit('/', 1)[-1]
             if (name in {'<', '>', '>>', '>&', '<&', '&>', '&>>', '>|'} or
                     name.isdigit() and any(x in stage for x in ('<', '>', '>>', '>&', '<&', '>|'))):
-                if any(x.rsplit('/', 1)[-1] in FAMILIES for x in stage):
+                if any(covered_command(stage[i:]) for i, x in enumerate(stage)
+                       if x.rsplit('/', 1)[-1] in FAMILIES):
                     records.append(Transfer('shell', unresolved=True))
             if name in FAMILIES:
                 found = _one(stage, tuple(reads))
@@ -217,6 +226,8 @@ def parse(command):
 
 def _one(t, piped=()):
     f = t[0].rsplit('/', 1)[-1]
+    if not covered_command(t):
+        return []
     redirected = list(piped)
     t = list(t)
     if '<' in t:
@@ -367,8 +378,10 @@ def _one(t, piped=()):
     if f == 'aws' and any(t[i:i + 2] == ['s3', 'cp'] for i in range(1, len(t) - 1)):
         i = next(i for i in range(1, len(t) - 1) if t[i:i + 2] == ['s3', 'cp'])
         pos, vals, bad = options(t[1:i] + t[i + 2:],
-            {'--profile', '--region', '--endpoint-url', '--content-type', '--acl', '--storage-class'},
-            {'--quiet', '--only-show-errors', '--no-progress', '--dryrun', '--recursive'})
+            {'--profile', '--region', '--endpoint-url', '--content-type', '--acl', '--storage-class',
+             '--exclude', '--include', '--cli-connect-timeout', '--cli-read-timeout'},
+            {'--quiet', '--only-show-errors', '--no-progress', '--dryrun', '--recursive',
+             '--no-cli-pager', '--no-sign-request'})
         if not bad and any(k == '--dryrun' for k, v in vals):
             return []
         if not bad and len(pos) == 2 and not any(dynamic(x) for x in pos) and pos[0].startswith('s3://'):

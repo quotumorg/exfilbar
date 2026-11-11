@@ -1,5 +1,6 @@
 ## 0.5.5
 
+- Keep ordinary gh/aws operations outside upload recognition when their output is redirected. Recognize common S3 download filters, CLI timeouts, pager and signing flags without losing upload route checks.
 - Recognize explicit-repository gh release uploads and literal aws s3 cp uploads; route them by repository URL and S3 URI. Implicit repositories, explicit endpoint overrides and recursive uploads remain unresolved.
 - Accept HTTPie's common form flags without losing known file sources or route checks.
 - Verification failures explain missing/unsafe key recovery, mismatched keys and unsigned upgrade expectations without exposing key material.
