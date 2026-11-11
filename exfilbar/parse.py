@@ -58,6 +58,59 @@ def options(tokens, operands, flags):
     return pos, values, bad
 
 
+def ignore_output_redirects(command):
+    """Erase only literal fd duplication/closure and output to /dev/null.
+
+    Work on shell text before shlex loses quoting and fd adjacency. In
+    particular, a quoted "2" before >&1 is still an argument, not an fd.
+    File writes and input redirects remain visible to the conservative parser.
+    """
+    pieces, start, word, quote, i = [], 0, 0, '', 0
+    boundaries = ' \t\r\n;&|<>()'
+    while i < len(command):
+        char = command[i]
+        if char == '\\' and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ''
+            i += 1
+            continue
+        if char in "\"'":
+            quote = char
+            i += 1
+            continue
+        if char in '<>':
+            j = i + 1
+            if j < len(command) and command[j] in (char, '&'):
+                j += 1
+            operator = command[i:j]
+            target_start = j
+            while target_start < len(command) and command[target_start] in ' \t':
+                target_start += 1
+            end = target_start
+            while end < len(command) and command[end] not in boundaries:
+                end += 1
+            target = command[target_start:end]
+            safe = (operator in ('>&', '<&') and
+                    (target.isascii() and target.isdigit() or target == '-')) or (
+                    operator in ('>', '>>') and target == '/dev/null')
+            # A leading & is unsupported combined redirection, not a separator
+            # to erase accidentally. Leave it for conservative handling.
+            if safe and (i == 0 or command[i - 1] not in '<>&'):
+                prefix = command[word:i]
+                begin = word if prefix.isascii() and prefix.isdigit() else i
+                pieces.extend((command[start:begin], ' '))
+                start, i, word = end, end, end
+                continue
+        if char in boundaries:
+            word = i + 1
+        i += 1
+    pieces.append(command[start:])
+    return ''.join(pieces)
+
+
 def parse(command):
     """Return transfer records, never expand a token or inspect a source file."""
     if len(command) > 32768:
@@ -70,6 +123,7 @@ def parse(command):
         found = parse(normalized)
         if found:
             return [replace(x, unresolved=True) for x in found]
+    command = ignore_output_redirects(command)
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|<>()\n')
         lexer.whitespace = ' \t\r'
