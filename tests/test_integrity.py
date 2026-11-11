@@ -15,7 +15,7 @@ from exfilbar.__main__ import main
 from exfilbar.integrity import canonical, format_verification
 from exfilbar.ledger import Ledger, MAX_EVENTS, MAX_SESSIONS, session_key
 from exfilbar.policy import Policy
-from support import Context, entry
+from support import Context, admission_clock, entry
 
 
 class IntegrityTests(unittest.TestCase):
@@ -70,7 +70,9 @@ class IntegrityTests(unittest.TestCase):
     def test_explicit_hmac_requirement_rejects_an_unsigned_replacement(self):
         self.record()
         self.assertTrue(self.ledger.verify()['intact'])
-        self.assertEqual(self.ledger.verify(require_hmac=True)['broken'], 1)
+        result = self.ledger.verify(require_hmac=True)
+        self.assertEqual(result['broken'], 1)
+        self.assertIn('Enable integrity_hmac for new decisions', format_verification(result))
 
     def test_hmac_requirement_rejects_a_legacy_only_replacement(self):
         self.record(signed=True)
@@ -184,7 +186,7 @@ class IntegrityTests(unittest.TestCase):
         def write(index):
             barrier.wait()
             Ledger(self.directory).record(str(index), 'terminal', self.policy.inspection, integrity_hmac=True)
-        with ThreadPoolExecutor(max_workers=16) as pool:
+        with admission_clock(Ledger), ThreadPoolExecutor(max_workers=16) as pool:
             list(pool.map(write, range(16)))
         verified = self.ledger.verify()
         self.assertTrue(verified['intact'])
@@ -218,11 +220,14 @@ class IntegrityTests(unittest.TestCase):
         before = (self.directory / 'egress.db').read_bytes()
         self.assertEqual(self.ledger.read('s')['out'], 1)
         self.assertEqual(self.ledger.verify()['legacy'], 1)
+        self.assertIn('earlier unsigned and legacy records remain unverified by HMAC',
+                      format_verification(self.ledger.verify(require_hmac=True)))
         self.assertEqual((self.directory / 'egress.db').read_bytes(), before)
-        self.record()
+        self.record(signed=True)
         self.assertEqual(self.ledger.read('s')['out'], 2)
         result = self.ledger.verify()
         self.assertEqual((result['records'], result['legacy'], result['intact']), (1, 1, True))
+        self.assertEqual(result['signed'], 1)
         self.assertIn('1 legacy records precede the chain (unverified)', format_verification(result))
 
     def test_feed_eviction_never_evicts_chain_history(self):
@@ -274,6 +279,24 @@ class IntegrityTests(unittest.TestCase):
         self.assertIn('1 records, chain intact; 1 HMAC records', ctx.commands['exfil']('verify'))
         ctx.settings['integrity_hmac'] = 'yes'
         self.assertEqual(ctx.hooks['pre_tool_call']('terminal', {'command': 'echo ok'}, session_id='s')['action'], 'block')
+
+    def test_key_failure_messages_give_safe_recovery_steps(self):
+        module = entry()
+        ctx = Context(integrity_hmac=True)
+        module.register(ctx)
+        ledger = module.Ledger()
+        ledger.record('s', 'terminal', self.policy.inspection, integrity_hmac=True)
+        key = Path(module._test_directory.name) / 'integrity.key'
+        key.write_bytes(b'x' * 32)
+        self.assertIn('matching trusted backup', ctx.commands['exfil']('verify'))
+        key.unlink()
+        message = ctx.commands['exfil']('verify')
+        self.assertIn('Restore the original 32-byte key', message)
+        self.assertIn('Do not generate a replacement', message)
+        self.assertFalse(key.exists())
+        with patch('sys.argv', ['exfilbar', 'verify', '--data-dir', module._test_directory.name]), redirect_stdout(StringIO()) as output:
+            self.assertEqual(main(), 1)
+        self.assertIn('mode 600', output.getvalue())
 
     def test_readme_output_is_generated_by_the_isolated_demo(self):
         import importlib.util

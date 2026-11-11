@@ -1,5 +1,10 @@
 ## 0.5.5
 
+- Recognize explicit-repository gh release uploads and literal aws s3 cp uploads; route them by repository URL and S3 URI. Implicit repositories, explicit endpoint overrides and recursive uploads remain unresolved.
+- Accept HTTPie's common form flags without losing known file sources or route checks.
+- Verification failures explain missing/unsafe key recovery, mismatched keys and unsigned upgrade expectations without exposing key material.
+- Concurrent HMAC and synchronized batch outcome fixtures use an injected admission clock; real expiry tests and elapsed smoke checks remain separate.
+
 - Literal fd redirects and output to /dev/null preserve recognized upload sources, destinations and route checks; file-writing redirects remain unresolved.
 - Newly recorded decisions use an append-only SHA-256 chain anchored to a random install id, with optional local HMAC and legacy-ledger migration.
 - `/exfil verify` and `python3 -m exfilbar verify --data-dir <directory>` check history offline and report the first broken index or preceding unverified legacy records.

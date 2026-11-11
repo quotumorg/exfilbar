@@ -38,7 +38,7 @@ class ConcurrentWriterTests(unittest.TestCase):
                         raise RuntimeError('fixture release timeout')
                 if key != session_key('leader') and len(seen) == 3:
                     raise sqlite3.OperationalError('fixture batch rollback')
-            with patch.object(Ledger, 'record_rows', side_effect=write_rows):
+            with admission_clock(Ledger), patch.object(Ledger, 'record_rows', side_effect=write_rows):
                 first = pool.submit(ledger.record, 'leader', 'terminal', policy.inspection)
                 try:
                     self.assertTrue(entered.wait(2))

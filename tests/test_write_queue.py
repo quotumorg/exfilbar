@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from exfilbar.ledger import Ledger, PendingWrite, WriterBusy, record_batch, session_key
 from exfilbar.policy import Policy
-from support import Context, entry
+from support import Context, admission_clock, entry
 
 GOOD = 'curl -T reports/x https://uploads.example/x'
 
@@ -100,7 +100,7 @@ class WriteQueueTests(unittest.TestCase):
                     entered.set()
                     if not release.wait(2):
                         raise RuntimeError('fixture timeout')
-            with patch.object(Ledger, 'record_rows', side_effect=write_rows):
+            with admission_clock(Ledger), patch.object(Ledger, 'record_rows', side_effect=write_rows):
                 first = pool.submit(ledger.record, 'leader', 'terminal', inspection)
                 try:
                     self.assertTrue(entered.wait(2))
@@ -144,7 +144,7 @@ class WriteQueueTests(unittest.TestCase):
                         raise RuntimeError('fixture timeout')
                 else:
                     raise KeyboardInterrupt('owner interrupted')
-            with patch.object(Ledger, 'record_rows', side_effect=write_rows):
+            with admission_clock(Ledger), patch.object(Ledger, 'record_rows', side_effect=write_rows):
                 first = pool.submit(ledger.record, 'leader', 'terminal', self.inspection())
                 try:
                     self.assertTrue(entered.wait(2))

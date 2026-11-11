@@ -9,6 +9,8 @@ import stat
 
 FIELDS = ('session', 'time', 'tool', 'paths', 'paths_truncated',
           'destination', 'decision', 'rule')
+HMAC_REQUIRED = ('No HMAC records found. Enable integrity_hmac for new decisions; '
+                 'earlier unsigned and legacy records remain unverified by HMAC.')
 
 
 def canonical(value):
@@ -102,14 +104,14 @@ def verify(db, *, require_hmac=False):
             return dict(result, intact=False, broken=1)
         result['legacy'] = db.execute('SELECT COUNT(*) FROM events').fetchone()[0]
         if require_hmac and result['legacy']:
-            result.update(intact=False, broken=1)
+            result.update(intact=False, broken=1, hint=HMAC_REQUIRED)
         return result
     meta = dict(db.execute("SELECT key,value FROM meta WHERE key LIKE 'chain_%'"))
     if 'chain_install' not in meta:
         if not meta and db.execute('SELECT 1 FROM decision_chain LIMIT 1').fetchone() is None:
             result['legacy'] = db.execute('SELECT COUNT(*) FROM events').fetchone()[0]
             if require_hmac and result['legacy']:
-                result.update(intact=False, broken=1)
+                result.update(intact=False, broken=1, hint=HMAC_REQUIRED)
             return result
         return dict(result, intact=False, broken=1)
     index, key = 1, None
@@ -130,8 +132,16 @@ def verify(db, *, require_hmac=False):
                 raise ValueError('broken record')
             if payload['signed']:
                 if key is None:
-                    key = local_key(db)
+                    try:
+                        key = local_key(db)
+                    except (OSError, ValueError):
+                        result['hint'] = ('Local integrity.key is missing, malformed or unsafe. '
+                            'Restore the original 32-byte key beside egress.db, owned by this user '
+                            'with mode 600. Do not generate a replacement for a sealed store.')
+                        raise
                 if not hmac.compare_digest(hmac.new(key, encoded, sha256).hexdigest(), row['hmac']):
+                    result['hint'] = ('HMAC mismatch. Check that integrity.key belongs to this '
+                        'database; restore a matching trusted backup if needed.')
                     raise ValueError('broken authentication')
                 result['signed'] += 1
             elif row['hmac'] or result['signed']:
@@ -155,6 +165,7 @@ def verify(db, *, require_hmac=False):
             raise ValueError('broken authenticated head')
         if require_hmac and result['records'] and not result['signed']:
             index = 1
+            result['hint'] = HMAC_REQUIRED
             raise ValueError('authentication required')
     except (ValueError, KeyError, TypeError, OSError):
         result.update(intact=False, broken=index)
@@ -170,4 +181,6 @@ def format_verification(result):
         text += f"; {result['legacy']} legacy records precede the chain (unverified)"
     if result['signed']:
         text += f"; {result['signed']} HMAC records checked with the local key"
+    if result.get('hint'):
+        text += '. ' + result['hint']
     return text

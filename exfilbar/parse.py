@@ -5,7 +5,7 @@ import shlex
 
 MAX_PAIRS = 1024
 
-FAMILIES = {'scp', 'rsync', 'curl', 'nc', 'netcat', 'ncat', 'wget', 'http', 'https', 'sftp', 'socat', 'ssh', 'mail', 'mailx', 'git'}
+FAMILIES = {'scp', 'rsync', 'curl', 'nc', 'netcat', 'ncat', 'wget', 'http', 'https', 'sftp', 'socat', 'ssh', 'mail', 'mailx', 'git', 'gh', 'aws'}
 WRAPPERS = {'sudo', 'env', 'command', 'exec', 'timeout', 'sh', 'bash', 'zsh',
             '!', 'time', 'nohup', 'nice', 'setsid'}
 
@@ -315,7 +315,9 @@ def _one(t, piped=()):
                 if not any(c in field for c in '=:\\'):
                     sources.append(filename.split(';', 1)[0])
                     ambiguous |= not bool(field) or '\\' in filename
-        bad = ambiguous or any(x.startswith('-') for x in t[1:]) or len(urls) != 1
+        bad = ambiguous or any(x.startswith('-') and x not in {
+            '--form', '-f', '--multipart', '--check-status', '--ignore-stdin',
+            '--print=Hh', '--quiet', '-q'} for x in t[1:]) or len(urls) != 1
         if sources or bad:
             return [Transfer(f, tuple(sources), dest, bad or dynamic(dest) or
                              any(dynamic(x) or x in ('', '-') for x in sources))]
@@ -350,6 +352,35 @@ def _one(t, piped=()):
         return [Transfer(f, piped, dest, bad or not piped or
                          any(dynamic(x) for x in piped) or dynamic(dest))
                 for dest in (destinations or ['unknown'])]
+    if f == 'gh' and any(t[i:i + 2] == ['release', 'upload'] for i in range(1, len(t) - 1)):
+        i = next(i for i in range(1, len(t) - 1) if t[i:i + 2] == ['release', 'upload'])
+        pos, vals, bad = options(t[1:i] + t[i + 2:], {'-R', '--repo'}, {'--clobber'})
+        repos = [v for k, v in vals if k in ('-R', '--repo')]
+        repo = repos[0] if len(repos) == 1 else ''
+        # An implicit repository needs cwd/config/network resolution. Never
+        # infer it from the workspace name or inspect Git configuration.
+        match = re.fullmatch(r'(?:(?:https://)?([A-Za-z0-9.-]+)/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)', repo)
+        dest = ('https://' + (match[1] or 'github.com') + '/' + match[2] + '/' + match[3]) if match else 'unknown'
+        sources = tuple(x.split('#', 1)[0] for x in pos[1:])
+        return [Transfer(f, sources, dest, bad or not match or len(pos) < 2 or
+                         dynamic(pos[0]) or any(not x or dynamic(x) or x.endswith('/') for x in sources))]
+    if f == 'aws' and any(t[i:i + 2] == ['s3', 'cp'] for i in range(1, len(t) - 1)):
+        i = next(i for i in range(1, len(t) - 1) if t[i:i + 2] == ['s3', 'cp'])
+        pos, vals, bad = options(t[1:i] + t[i + 2:],
+            {'--profile', '--region', '--endpoint-url', '--content-type', '--acl', '--storage-class'},
+            {'--quiet', '--only-show-errors', '--no-progress', '--dryrun', '--recursive'})
+        if not bad and any(k == '--dryrun' for k, v in vals):
+            return []
+        if not bad and len(pos) == 2 and not any(dynamic(x) for x in pos) and pos[0].startswith('s3://'):
+            return []  # download or server-side copy, no local file source
+        sources = tuple(pos[:1])
+        dest = pos[1] if len(pos) == 2 else 'unknown'
+        endpoints = [v for k, v in vals if k == '--endpoint-url']
+        if endpoints:
+            dest = endpoints[-1]
+        return [Transfer(f, sources, dest, bad or len(pos) != 2 or bool(endpoints) or
+                         any(k == '--recursive' for k, v in vals) or not dest.startswith('s3://') or
+                         dynamic(dest) or any(not x or x == '-' or dynamic(x) or x.endswith('/') for x in sources))]
     if f == 'git':
         # Global git options are deliberately unresolved rather than guessed.
         if t[1:2] == ['push']:
