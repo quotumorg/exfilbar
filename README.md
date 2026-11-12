@@ -1,5 +1,7 @@
 # exfilbar
 
+no keys · no network · never signs or pays · runs without a wallet
+
 Version 0.5.5 · community plugin for Hermes Agent, not by Nous
 
 ![exfilbar: route 1 lets reports/** go to uploads.example; partners.example is off route and blocked](docs/banner.png)
