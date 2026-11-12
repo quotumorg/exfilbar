@@ -1,6 +1,8 @@
-"""Deterministic inspection properties and a 300 ms wall-time smoke ceiling.
+"""Deterministic inspection properties and a 300 ms thread-CPU smoke ceiling.
 
-EXFILBAR_TIMING_LIMIT_MS is an explicit slow-CI override, never set by this suite.
+EXFILBAR_TIMING_LIMIT_MS overrides CPU time, never set by this suite.
+Scheduler delays and SQLite waits do not measure parser work. Queue ownership,
+batching, configured waits and injected deadline clocks are tested separately.
 All strings are inspected in isolated storage; no transfer is executed.
 """
 import ast
@@ -50,15 +52,17 @@ class TimingTests(unittest.TestCase):
 
     def check(self, name, tool, value, expected):
         start = time.perf_counter()
+        cpu_start = time.thread_time()
         # Work caps determine the verdict. Slow inspection must not turn a
         # policy pass into a storage-admission block in this property test.
         with admission_clock(type(self.module.Ledger())):
             result = self.hook(tool, {'command' if tool == 'terminal' else 'code': value}, session_id='timing')
         elapsed = time.perf_counter() - start
+        cpu_elapsed = time.thread_time() - cpu_start
         actual = 'block' if result and result.get('action') == 'block' else 'pass'
-        print(f'TIMING | {name} | {len(value)} | {elapsed * 1000:.3f} | {actual}')
+        print(f'TIMING | {name} | {len(value)} | {elapsed * 1000:.3f} ms wall | {cpu_elapsed * 1000:.3f} ms CPU | {actual}')
         self.assertEqual(actual, expected, name)
-        self.assertLess(elapsed, LIMIT, f'{name}: {elapsed * 1000:.3f} ms')
+        self.assertLess(cpu_elapsed, LIMIT, f'{name}: {cpu_elapsed * 1000:.3f} ms CPU')
 
     def test_real_budget_still_blocks_when_inspection_exhausts_admission(self):
         from unittest.mock import patch

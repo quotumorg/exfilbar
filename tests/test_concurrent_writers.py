@@ -5,11 +5,10 @@ from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
 from threading import Barrier, Event
-import time
 import unittest
 from unittest.mock import Mock, patch
 
-from exfilbar.ledger import Ledger, WriterBusy, record_batch, session_key, writer_lock
+from exfilbar.ledger import Ledger, WRITE_TIMEOUT, WriterBusy, record_batch, session_key, writer_lock
 from exfilbar.policy import Policy
 from support import Context, ROOT, admission_clock, entry
 
@@ -157,45 +156,45 @@ class ConcurrentWriterTests(unittest.TestCase):
         with closing(module.Ledger().connect()) as writer:
             writer.execute('BEGIN EXCLUSIVE')
             ctx.settings['routes'] = [dict(paths=['reports/**'], to=['*'])]
-            started = time.perf_counter()
-            result = ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s')
-            elapsed = time.perf_counter() - started
+            with admission_clock(type(module.Ledger())), patch('sqlite3.connect', wraps=sqlite3.connect) as connect:
+                result = ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s')
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
-            self.assertLess(elapsed, 0.3)
+            self.assertEqual(connect.call_count, 3)  # publish, invalidate, record
+            for call in connect.call_args_list:
+                self.assertGreater(call.kwargs['timeout'], 0)
+                self.assertLessEqual(call.kwargs['timeout'], WRITE_TIMEOUT)
             writer.rollback()
         self.assertIsNone(ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s'))
         self.assertEqual(module.Ledger().read('s')['out'], 1)
-        print(f'WRITERS | external lock with changed policy | {elapsed * 1000:.3f} ms')
 
     def test_twenty_fresh_databases_with_sixteen_concurrent_writers(self):
-        maximum = 0
         with admission_clock(Ledger), TemporaryDirectory() as root, ThreadPoolExecutor(max_workers=16) as pool:
             for iteration in range(20):
                 directory = Path(root) / str(iteration)
+                batch = record_batch(directory)
                 gate = Barrier(16, timeout=5)
                 def write(index):
-                    policy = Policy(routes=ROUTES)
-                    policy.evaluate(GOOD)
                     ledger = Ledger(directory)
-                    elapsed = []
-                    for _ in range(3):
+                    for round_index in range(3):
+                        policy = Policy(routes=ROUTES)
+                        policy.evaluate(GOOD.replace('weekly', f'{index}-{round_index}'))
                         gate.wait()
-                        started = time.perf_counter()
                         try:
                             ledger.record('parallel', 'terminal', policy.inspection)
                         except Exception:
                             gate.abort()
                             raise
-                        elapsed.append(time.perf_counter() - started)
-                    return max(elapsed)
-                maximum = max(maximum, *pool.map(write, range(16)))
-                self.assertEqual(Ledger(directory).read('parallel')['out'], 48)
+                list(pool.map(write, range(16)))
+                feed = Ledger(directory).read('parallel')
+                self.assertEqual((feed['out'], feed['blocked']), (48, 0))
+                self.assertCountEqual([event['paths'] for event in feed['events']],
+                                      [[f'reports/{i}-{r}.csv'] for i in range(16) for r in range(3)])
+                self.assertFalse(batch.active)
+                self.assertEqual(batch.pending, [])
                 verified = Ledger(directory).verify()
                 self.assertTrue(verified['intact'])
                 self.assertEqual(verified['records'], 48)
-        self.assertLess(maximum, 0.3)
-        print(f'WRITERS | 20 fresh stores x 16 writers x 3 rounds | {maximum * 1000:.3f} ms maximum')
 
     def test_concurrent_registered_hooks_preserve_pass_block_and_feed(self):
         module = entry()
@@ -204,27 +203,30 @@ class ConcurrentWriterTests(unittest.TestCase):
         # Registration normally initializes storage. Also cover storage removed
         # before first dispatch, so hooks themselves race to initialize it.
         (Path(module._test_directory.name) / 'egress.db').unlink()
+        import sys
+        batch = sys.modules[type(module.Ledger()).__module__].record_batch(Path(module._test_directory.name))
         gate = Barrier(16, timeout=5)
         def call(index):
             gate.wait()
-            start = time.perf_counter()
             result = ctx.hooks['pre_tool_call']('terminal',
-                {'command': BAD if index % 2 else GOOD}, session_id='parallel')
+                {'command': (BAD if index % 2 else GOOD).replace('weekly', str(index))}, session_id='parallel')
             if index % 2:
                 self.assertEqual(result['action'], 'block')
                 self.assertIn('off route', result['message'])
             else:
                 self.assertIsNone(result)
-            return time.perf_counter() - start
         with admission_clock(type(module.Ledger())), ThreadPoolExecutor(max_workers=16) as pool:
-            maximum = max(pool.map(call, range(16)))
-        self.assertLess(maximum, 0.3)
+            list(pool.map(call, range(16)))
         feed = module.Ledger().read('parallel')
         self.assertEqual((feed['out'], feed['blocked']), (8, 8))
+        self.assertCountEqual([(event['paths'], event['decision']) for event in feed['events']],
+                              [([f'reports/{i}.csv'], 'blocked' if i % 2 else 'allowed')
+                               for i in range(16)])
+        self.assertFalse(batch.active)
+        self.assertEqual(batch.pending, [])
         verified = module.Ledger().verify()
         self.assertTrue(verified['intact'])
         self.assertEqual(verified['records'], 16)
-        print(f'WRITERS | 16 registered hooks, cold store | {maximum * 1000:.3f} ms maximum')
 
     def test_queue_timeout_fails_closed_and_recovers(self):
         module = entry()
@@ -233,20 +235,28 @@ class ConcurrentWriterTests(unittest.TestCase):
         ledger = module.Ledger()
         # The entry harness loads its own package instance, as Hermes does.
         import sys
-        gate = sys.modules[ledger.__class__.__module__].writer_lock(ledger.directory)
+        ledger_module = sys.modules[ledger.__class__.__module__]
+        gate, now, waits = Mock(), [10.0], []
+        def acquire(timeout):
+            waits.append(timeout)
+            now[0] += timeout
+            return False
+        gate.acquire.side_effect = acquire
         # Force mirror publication too: its waits must share the hook budget.
         ctx.settings['routes'] = [dict(paths=['reports/**'], to=['*'])]
-        with gate:
-            started = time.perf_counter()
+        with admission_clock(type(ledger), now), patch.object(ledger_module, 'writer_lock', return_value=gate):
             result = ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s')
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
-            elapsed = time.perf_counter() - started
-            self.assertLess(elapsed, 0.3)
+        self.assertEqual(len(waits), 2)  # publish, invalidate; record expires in the queue
+        self.assertAlmostEqual(waits[0], ledger_module.WRITE_BUDGET)
+        self.assertAlmostEqual(sum(waits), ledger_module.WRITE_BUDGET)
+        self.assertTrue(all(wait >= 0 for wait in waits))
+        self.assertLessEqual(now[0], 10.0 + ledger_module.HOOK_ADMISSION_BUDGET)
+        gate.release.assert_not_called()
         self.assertEqual(ledger.read('s')['events'], [])
         self.assertIsNone(ctx.hooks['pre_tool_call']('terminal', {'command': GOOD}, session_id='s'))
         self.assertEqual(ledger.read('s')['out'], 1)
-        print(f'WRITERS | stuck queue with changed policy | {elapsed * 1000:.3f} ms')
 
     def test_failed_initialization_releases_gate_and_schema_is_atomic(self):
         with TemporaryDirectory() as directory:

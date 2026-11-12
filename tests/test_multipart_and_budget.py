@@ -3,16 +3,16 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import fnmatch
 import importlib.util
+import sqlite3
 from tempfile import TemporaryDirectory
-import time
 import unittest
 from unittest.mock import patch
 
 from exfilbar.code import inspect_code
-from exfilbar.ledger import Ledger, MAX_EVENTS, MAX_SESSIONS
+from exfilbar.ledger import Ledger, MAX_EVENTS, MAX_SESSIONS, READ_TIMEOUT, WRITE_TIMEOUT
 from exfilbar.parse import parse
 from exfilbar.policy import Policy
-from support import Context, ROOT, entry
+from support import Context, ROOT, admission_clock, entry
 
 ROUTES = [dict(paths=['reports/**'], to=['https://uploads.example/reports/*'])]
 
@@ -138,22 +138,23 @@ class SaturatedLedgerTests(unittest.TestCase):
                     Ledger(directory).record('0', 'terminal', policy.inspection)
 
             def poll():
-                elapsed = []
                 for _ in range(20):
-                    start = time.perf_counter()
                     self.assertEqual(len(Ledger(directory).routes()['routes']), 1)
                     self.assertEqual(len(Ledger(directory).read('0')['events']), MAX_EVENTS)
                     self.assertEqual(len(Ledger(directory).sessions()), MAX_SESSIONS)
-                    elapsed.append(time.perf_counter() - start)
-                return max(elapsed)
 
-            with ThreadPoolExecutor(max_workers=3) as pool:
+            with admission_clock(Ledger), patch('sqlite3.connect', wraps=sqlite3.connect) as connect, \
+                    ThreadPoolExecutor(max_workers=3) as pool:
                 futures = [pool.submit(write), pool.submit(poll), pool.submit(poll)]
-                values = [future.result() for future in futures]
-            maximum = max(values[1:])
-            # Three off-hook reads have separate 1 s busy timeouts.
-            self.assertLess(maximum, 3.1)
-            print(f'POLLING | 32 sessions x 128 events + writer | {maximum * 1000:.3f} ms maximum')
+                for future in futures:
+                    future.result(timeout=10)
+            self.assertEqual(connect.call_count, 140)  # 20 writes and 120 read snapshots
+            for call in connect.call_args_list:
+                self.assertEqual(call.kwargs['timeout'], READ_TIMEOUT if call.kwargs.get('uri') else WRITE_TIMEOUT)
+            self.assertEqual(len(ledger.read('0')['events']), MAX_EVENTS)
+            verified = ledger.verify()
+            self.assertTrue(verified['intact'])
+            self.assertEqual(verified['records'], MAX_SESSIONS * MAX_EVENTS + 20)
 
 
 class RouteDemoTests(unittest.TestCase):

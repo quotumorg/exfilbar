@@ -1,10 +1,12 @@
 """Routes mirror for the Desktop page: paths and allowed hosts only, never full patterns."""
 from contextlib import closing
 from tempfile import TemporaryDirectory
+import sqlite3
 import unittest
-from exfilbar.ledger import Ledger
+from unittest.mock import patch
+from exfilbar.ledger import Ledger, READ_TIMEOUT, WRITE_TIMEOUT
 from exfilbar.policy import Policy
-from support import Context, entry
+from support import Context, admission_clock, entry
 
 ROUTES = [{'paths': ['reports/**'], 'to': ['https://user:pw@uploads.example/reports/*?token=x']},
           {'paths': ['exports/*.csv'], 'to': ['backup@files.example:incoming/*', '*']}]
@@ -139,7 +141,6 @@ class MirrorRegressions(unittest.TestCase):
     def test_combined_polling_under_concurrent_event_writer(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
-        import time
         with TemporaryDirectory() as directory:
             ledger = Ledger(directory)
             ledger.publish_routes(Policy(routes=ROUTES).routes)
@@ -152,22 +153,22 @@ class MirrorRegressions(unittest.TestCase):
                     Ledger(directory).record('s', 'terminal', policy.inspection)
             def poll():
                 start_gate.wait()
-                elapsed = []
                 for _ in range(20):
-                    start = time.perf_counter()
-                    Ledger(directory).routes()
-                    Ledger(directory).read('s')
-                    elapsed.append(time.perf_counter() - start)
-                return max(elapsed)
-            with ThreadPoolExecutor(max_workers=3) as pool:
+                    self.assertEqual(len(Ledger(directory).routes()['routes']), 2)
+                    feed = Ledger(directory).read('s')
+                    self.assertEqual(feed['out'], len(feed['events']))
+                    self.assertEqual(feed['blocked'], 0)
+            with admission_clock(Ledger), patch('sqlite3.connect', wraps=sqlite3.connect) as connect, \
+                    ThreadPoolExecutor(max_workers=3) as pool:
                 writer = pool.submit(write)
                 readers = [pool.submit(poll) for _ in range(2)]
                 writer.result()
-                maximum = max(f.result() for f in readers)
-            # Two off-hook reads may each wait up to 1 s, plus scheduling.
-            self.assertLess(maximum, 2.1)
+                for future in readers:
+                    future.result(timeout=10)
+            self.assertEqual(connect.call_count, 100)  # 20 writes and 80 read snapshots
+            for call in connect.call_args_list:
+                self.assertEqual(call.kwargs['timeout'], READ_TIMEOUT if call.kwargs.get('uri') else WRITE_TIMEOUT)
             self.assertEqual(ledger.read('s')['out'], 20)
-            print(f'POLLING | routes + feed with writer | {maximum * 1000:.3f} ms maximum')
 
     def test_real_partial_publish_rollback_and_feed_failure(self):
         module = entry()

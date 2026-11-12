@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event
 import types
 import unittest
 from unittest.mock import patch
@@ -12,9 +13,9 @@ from exfilbar.policy import Policy
 from exfilbar.code import inspect_code
 from exfilbar.demo import replay
 from exfilbar.destinations import route_matches
-from exfilbar.ledger import Ledger, MAX_EVENTS, MAX_SESSIONS
+from exfilbar.ledger import Ledger, MAX_EVENTS, MAX_SESSIONS, record_batch, writer_lock
 from exfilbar.report import format_verdict
-from support import Context, ROOT, entry
+from support import Context, ROOT, admission_clock, entry
 
 ROUTES = [{'paths': ['reports/**'], 'to': ['https://uploads.example/reports/*']}]
 GOOD = 'curl -T reports/weekly.csv https://uploads.example/reports/weekly.csv'
@@ -221,13 +222,62 @@ class FeedTests(unittest.TestCase):
         self.assertTrue(event['paths_truncated'])
 
     def test_concurrent_writers(self):
+        batch = record_batch(Path(self.directory.name))
+        gate = writer_lock(Path(self.directory.name))
+        entered, release = Event(), Event()
+        record_rows, transactions = self.ledger.record_rows, {}
+        expected = [[f'reports/{i}-{part}.csv'] for i in range(20) for part in ('a', 'b')]
+
+        def write_rows(db, rows):
+            # The gate must cover every row, including the held leader.
+            acquired = gate.acquire(blocking=False)
+            if acquired:
+                gate.release()
+            self.assertFalse(acquired, 'record_rows ran outside the writer gate')
+            transactions[db] = transactions.get(db, 0) + 1
+            record_rows(db, rows)
+            if json.loads(rows[0][3]) == expected[0]:
+                entered.set()
+                if not release.wait(10):
+                    raise RuntimeError('fixture release timeout')
+
         def write(i):
             policy = Policy(routes=ROUTES)
-            policy.evaluate(GOOD)
+            policy.evaluate('; '.join(
+                f'curl -T reports/{i}-{part}.csv https://uploads.example/reports/{i}-{part}.csv'
+                for part in ('a', 'b')))
             Ledger(self.directory.name).record('parallel', 'terminal', policy.inspection)
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            list(pool.map(write, range(20)))
-        self.assertEqual(self.ledger.read('parallel')['out'], 20)
+
+        with admission_clock(Ledger), patch.object(Ledger, 'record_rows', side_effect=write_rows), \
+                ThreadPoolExecutor(max_workers=20) as pool:
+            first = pool.submit(write, 0)
+            followers = []
+            try:
+                self.assertTrue(entered.wait(10))
+                # Admit in a known order while the first transaction is held.
+                # This proves FIFO batching without relying on scheduler speed.
+                for i in range(1, 20):
+                    followers.append(pool.submit(write, i))
+                    with batch.condition:
+                        self.assertTrue(batch.condition.wait_for(lambda: len(batch.pending) == i, 10))
+                self.assertFalse(first.done())
+                self.assertTrue(all(not future.done() for future in followers))
+                self.assertEqual(list(transactions.values()), [1])
+            finally:
+                release.set()
+            first.result(timeout=10)
+            for future in followers:
+                future.result(timeout=10)
+
+        feed = self.ledger.read('parallel')
+        self.assertEqual((feed['out'], feed['blocked']), (40, 0))
+        self.assertEqual([event['paths'] for event in feed['events']], expected)
+        self.assertEqual(sorted(transactions.values()), [1, 3, 16])
+        self.assertFalse(batch.active)
+        self.assertEqual(batch.pending, [])
+        verified = self.ledger.verify()
+        self.assertTrue(verified['intact'])
+        self.assertEqual(verified['records'], 40)
 
     def test_profile_storage_is_resolved_each_time(self):
         with TemporaryDirectory(prefix='exfilbar-profile-') as other:
